@@ -14,6 +14,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/openshift/openshift-sdn/ovs-simple/controller"
 	"github.com/openshift/openshift-sdn/pkg/registry"
+	"github.com/openshift/openshift-sdn/pkg/version"
 )
 
 type CmdLineOpts struct {
@@ -28,6 +29,7 @@ type CmdLineOpts struct {
 	minion        bool
 	skipsetup     bool
 	sync          bool
+	version       bool
 	help          bool
 }
 
@@ -48,6 +50,7 @@ func init() {
 	flag.BoolVar(&opts.skipsetup, "skip-setup", false, "Skip the setup when in minion mode")
 	flag.BoolVar(&opts.sync, "sync", false, "Sync the minions directly to etcd-path (Do not wait for PaaS to do so!)")
 
+	flag.BoolVar(&opts.version, "version", false, "print version info")
 	flag.BoolVar(&opts.help, "help", false, "print this message")
 }
 
@@ -101,6 +104,11 @@ func main() {
 	if opts.help {
 		fmt.Fprintf(os.Stderr, "Usage: %s [OPTION]...\n", os.Args[0])
 		flag.PrintDefaults()
+		os.Exit(0)
+	}
+
+	if opts.version {
+		fmt.Fprintf(os.Stdout, "openshift-sdn %v\n", version.Get())
 		os.Exit(0)
 	}
 
