@@ -1,6 +1,33 @@
-## SDN solutions for Openshift
+## SDN solution for OpenShift
 
-Software to get an overlay network up and running for a docker cluster. This is still a work in progress. Do not use it in production.
+openshift-sdn configures an overlay network for a Docker cluster, using Open
+vSwitch (OVS). This is still a work in progress. Do not use it in production.
+
+The openshift-sdn daemon runs in one of two modes: either master or minion.
+
+If launched without the -minion flag, openshift-sdn operates as a master.  In
+this mode, openshift-sdn watches its registry, stored in etcd.  When a minion is
+added to this registry, openshift-sdn will allocate an unused subnet from the
+container network (hardcoded for now to 10.1.0.0/16) and store this subnet in
+the registry.  When a minion is deleted from the registry, openshift-sdn will
+delete the registry entry for the subnet and consider the subnet available to be
+allocated again.
+
+If launched with the -minion flag, openshift-sdn will first register the local
+host as a minion in the aforementioned registry so that an openshift-sdn master
+will allocate a subnet to the minion.  Next, openshift-sdn will configure OVS,
+Docker, and the network stack on the local host with a VxLAN through which the
+containers on the local host can access the containers of all other
+participating minions on the container network (10.1.0.0/16).  Finally,
+openshift-sdn will monitor the registry to add and remove OpenFlow rules to the
+local host's VxLAN configuration as the openshift-sdn master adds and deletes
+subnets.
+
+Note that openshift-sdn in master mode does not configure the local (master)
+host to have access to the container network; if it is desirable for
+openshift-sdn to do so (for example, if the same host is both a master and a
+minion), then it is necessary to run two instances of openshift-sdn on the
+host: one instance in master mode and one in minion mode.
 
 #### Build and Install
 
@@ -58,6 +85,54 @@ Back on the master, to finally register the node:
 
 Done. Repeat last two pieces to add more nodes. Create new pods from the master (or just docker containers on the minions), and see that the pods are indeed reachable from each other. 
 
+
+##### Detailed operation
+
+To elaborate on the network configuration that openshift-sdn performs in minion
+mode, it makes use of five network devices:
+
+ - br0, an OVS bridge device;
+ - lbr0, a Linux bridge device;
+ - vlinuxbr and vovsbr, two Linux peer virtual Ethernet interfaces; and
+ - vxlan0, the OVS VxLAN device that provides access to remote minions.
+
+On initialization in minion mode, openshift-sdn creates lbr0 and configures
+Docker to use lbr0 as the bridge for containers; creates br0 in OVS; creates
+the vlinuxbr and vovsbr peer interfaces, which provide a point-to-point
+connection for the purpose of moving packets between the regular Linux
+networking stack and OVS; adds vlinuxbr to lbr0 and vovsbr to br0 (on port 9);
+and adds vxlan0 to br0 (on port 10).
+
+As openshift-sdn sees subnets added to and deleted from the registry by the
+master, it adds and deletes OpenFlow rules on br0 to route packets
+appropriately: packets with a destination IP address on the local minion's
+subnet go to vovsbr (port 9 on br0) and thus to vlinuxbr, the local bridge, and
+ultimately the local container; whereas packets with a destination IP address
+on a remote minion's subnet go to vxlan0 (port 10 on br0) and thus out onto the
+network.
+
+To illustrate, suppose we have two containers A and B where the peer virtual
+Ethernet device for container A's eth0 is named vethA and the peer for container
+B's eth0 is named vethB.  (If Docker's use of peer virtual Ethernet devices is
+not already familiar to you, see https://docs.docker.com/articles/networking/
+for details on networking in Docker.)
+
+Now suppose first that container A is on the local host and container B is also
+on the local host.  Then the flow of packets from container A to container B is
+as follows:
+
+eth0 (in A's netns) -> vethA -> lbr0 -> vlinuxbr -> vovsbr -> br0 -> vovsbr ->
+vlinuxbr -> lbr0 -> vethB -> eth0 (in B's netns).
+
+Next suppose instead that container A is on the local host and container B is on
+a remote host on the same container network.  Then the flow of packets from
+container A to container B is as follows:
+
+eth0 (in A's netns) -> vethA -> lbr0 -> vlinuxbr -> vovsbr -> br0 -> vxlan0 ->
+network\* -> vxlan0 -> br0 -> vovsbr -> vlinuxbr -> lbr0 -> vethB -> eth0 (in
+B's netns).
+
+\* After this point, device names refer to devices on container B's host.
 
 ##### OpenShift? PaaS? Can I have a 'plain setup' just for Docker?
 
