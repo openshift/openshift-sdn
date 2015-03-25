@@ -1,3 +1,19 @@
+########################################
+# REQUIRED VALUES
+########################################
+#
+# NOTE: values should not be quoted
+#
+# For nodes, the etcd endpoint provided by the master must be
+# specified in the MASTER_URL variable. This will likely change
+# to being the OpenShift Endpoint soon, this currently sets
+# -etcd-endpoints
+#
+# Example:
+#   MASTER_URL=http://10.0.0.1:4001
+#   MASTER_URL=http://10.0.0.1,10.0.0.2,10.0.0.3:4001
+MASTER_URL=http://localhost:4001
+
 # The $OPTIONS variable can specify any of the command-line options
 # available for openshift-sdn:
 #

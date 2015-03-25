@@ -1,3 +1,36 @@
+########################################
+# REQUIRED VALUES
+########################################
+#
+# NOTE: values should not be quoted
+#
+# For nodes, the etcd endpoint provided by the master must be
+# specified in the MASTER_URL variable. This will likely change
+# to being the OpenShift Endpoint soon, this currently sets
+# -etcd-endpoints
+#
+# Example:
+#   MASTER_URL=http://10.0.0.1:4001
+#   MASTER_URL=http://10.0.0.1,10.0.0.2,10.0.0.3:4001
+MASTER_URL=http://localhost:4001
+#
+# The externally-facing IP for this node must be specified in the
+# MINION_IP variable.
+#
+# Example:
+#   MINION_IP=10.0.0.20
+MINION_IP=
+# Any additional options can be specified here, in the OPTIONS
+# variable.
+#
+# The $DOCKER_OPTIONS variable is used to overwrite the $OPTIONS
+# variable in the /etc/sysconfig/docker file. This is a pretty ugly
+# hack, but whatevs
+DOCKER_OPTIONS='-b=lbr0 --mtu=1450 --selinux-enabled'
+
+########################################
+# OPTIONAL VALUES
+########################################
 # The $OPTIONS variable can specify any of the command-line options
 # available for openshift-sdn:
 #
@@ -29,30 +62,6 @@
 #  -vmodule=: comma-separated list of pattern=N settings for
 #    file-filtered logging
 #
-#    NOTE: values should not be quoted
-#
-# For nodes, the etcd endpoint provided by the master must be
-# specified in the MASTER_URL variable.
-#
-# Example:
-#   MASTER_URL=http://10.0.0.1:4001
-MASTER_URL=
-
-# The externally-facing IP for this node must be specified in the
-# MINION_IP variable.
-#
-# Example:
-#   MINION_IP=10.0.0.20
-MINION_IP=
-
-# Any additional options can be specified here, in the OPTIONS
-# variable.
-#
 # Example:
 #   OPTIONS=-etcd-cafile=/path/to/cafile
 OPTIONS=
-
-# The $DOCKER_OPTIONS variable is used to overwrite the $OPTIONS
-# variable in the /etc/sysconfig/docker file. This is a pretty ugly
-# hack, but whatevs
-DOCKER_OPTIONS='-b=lbr0 --mtu=1450 --selinux-enabled'

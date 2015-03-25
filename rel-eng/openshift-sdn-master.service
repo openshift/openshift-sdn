@@ -7,7 +7,7 @@ Requires=openshift-master.service
 [Service]
 Type=simple
 EnvironmentFile=-/etc/sysconfig/openshift-sdn-master
-ExecStart=/usr/bin/openshift-sdn $OPTIONS
+ExecStart=/usr/bin/openshift-sdn -etcd-endpoints=${MASTER_URL} $OPTIONS
 Restart=on-failure
 RestartSec=1s
 
