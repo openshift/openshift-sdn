@@ -16,6 +16,8 @@ import (
 type FlowController struct {
 }
 
+const ovs_gateway_addr = "11.11.254.254"
+
 func NewFlowController() *FlowController {
 	return &FlowController{}
 }
@@ -23,14 +25,18 @@ func NewFlowController() *FlowController {
 func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	_, ipnet, err := net.ParseCIDR(localSubnet)
 	subnetMaskLength, _ := ipnet.Mask.Size()
-	out, err := exec.Command("openshift-sdn-kube-subnet-setup.sh", netutils.GenerateDefaultGateway(ipnet).String(), ipnet.String(), containerNetwork, strconv.Itoa(subnetMaskLength)).CombinedOutput()
+	out, err := exec.Command("openshift-sdn-kube-subnet-setup.sh", netutils.GenerateDefaultGateway(ipnet).String(), ipnet.String(), containerNetwork, strconv.Itoa(subnetMaskLength), ovs_gateway_addr).CombinedOutput()
 	log.Infof("Output of setup script:\n%s", out)
 	if err != nil {
 		log.Errorf("Error executing setup script. \n\tOutput: %s\n\tError: %v\n", out, err)
 		return err
 	}
-	go c.manageLocalIpam(ipnet)
+	//go c.manageLocalIpam(ipnet)
 	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0").CombinedOutput()
+	if err != nil {
+		return err
+	}
+	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", "cookie=0x0,table=0,priority=50,actions=output:2").CombinedOutput()
 	return err
 }
 
@@ -46,7 +52,8 @@ func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(fmt.Sprintf("OPENSHIFT_SDN_TAP1_ADDR=%s\nOPENSHIFT_SDN_IPAM_SERVER=http://%s:%s", netutils.GenerateDefaultGateway(ipnet), ipamHost, ipamPort))
+	//_, err = f.WriteString(fmt.Sprintf("OPENSHIFT_SDN_TAP1_ADDR=%s\nOPENSHIFT_SDN_IPAM_SERVER=http://%s:%s", netutils.GenerateDefaultGateway(ipnet), ipamHost, ipamPort))
+	_, err = f.WriteString(fmt.Sprintf("OPENSHIFT_SDN_TAP1_ADDR=%s\nOPENSHIFT_SDN_IPAM_SERVER=http://%s:%s", ovs_gateway_addr, ipamPort))
 	if err != nil {
 		return err
 	}
@@ -56,9 +63,11 @@ func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
 	return nil
 }
 
-func (c *FlowController) AddOFRules(minionIP, localIP, subnet string) error {
+func (c *FlowController) AddOFRules(minionIP, subnet, localIP string) error {
 	cookie := generateCookie(minionIP)
 	if minionIP == localIP {
+		// return nil as the actions=NORMAL does not behave well, needs work
+		// for the input rules to containers, see the kube-hook
 		return nil
 		// self, so add the input rules
 		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=200,ip,in_port=1,nw_dst=%s,actions=NORMAL", cookie, subnet)

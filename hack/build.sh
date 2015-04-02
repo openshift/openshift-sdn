@@ -35,3 +35,6 @@ setup_env() {
 setup_env
 go install ${OSDN_GO_PACKAGE}
 cp -f ovs_subnet/bin/openshift-sdn-simple-setup-node.sh ${OSDN_GOPATH}/bin
+cp -f ovs_subnet/bin/openshift-ovs-subnet ${OSDN_GOPATH}/bin
+cp -f ovs_subnet/bin/openshift-sdn-kube-subnet-setup.sh ${OSDN_GOPATH}/bin
+cp -f ovs_subnet/bin/jq ${OSDN_GOPATH}/bin

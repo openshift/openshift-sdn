@@ -2,6 +2,7 @@ package ovs_subnet
 
 import (
 	"errors"
+	"fmt"
 	log "github.com/golang/glog"
 	"net"
 	"time"
@@ -30,7 +31,7 @@ type FlowController interface {
 
 func NewKubeController(sub registry.SubnetRegistry, hostname string, selfIP string) (*OvsController, error) {
 	kubeController, err := NewController(sub, hostname, selfIP)
-	if err != nil {
+	if err == nil {
 		kubeController.flowController = kube_controller.NewFlowController()
 	}
 	return kubeController, err
@@ -38,7 +39,7 @@ func NewKubeController(sub registry.SubnetRegistry, hostname string, selfIP stri
 
 func NewDefaultController(sub registry.SubnetRegistry, hostname string, selfIP string) (*OvsController, error) {
 	defaultController, err := NewController(sub, hostname, selfIP)
-	if err != nil {
+	if err == nil {
 		defaultController.flowController = default_controller.NewFlowController()
 	}
 	return defaultController, err
@@ -137,15 +138,20 @@ func (oc *OvsController) AddNode(minion string) error {
 		log.Errorf("Error creating network for minion %s.", minion)
 		return err
 	}
-	addrs, err := net.LookupIP(minion)
-	if err != nil {
-		log.Errorf("Failed to lookup IP address for minion %s.", minion)
-		return err
-	}
-	minionIP := addrs[0].String()
-	if minionIP == "" {
-		// minion's name is the IP address itself
-		minionIP = minion
+	var minionIP string
+	ip := net.ParseIP(minion)
+	if ip == nil {
+		addrs, err := net.LookupIP(minion)
+		if err != nil {
+			log.Errorf("Failed to lookup IP address for minion %s: %v", minion, err)
+			return err
+		}
+		minionIP = addrs[0].String()
+		if minionIP == "" {
+			return fmt.Errorf("Failed to obtain IP address from minion label: %s", minion)
+		}
+	} else {
+		minionIP = ip.String()
 	}
 	sub := &registry.Subnet{
 		Minion: minionIP,
