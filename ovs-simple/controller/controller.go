@@ -200,6 +200,7 @@ func (oc *OvsController) StartNode(sync, skipsetup bool) error {
 		subnets, err := oc.subnetRegistry.GetSubnets()
 		if err != nil {
 			log.Errorf("Could not fetch existing subnets: %v", err)
+			return err
 		}
 		for _, s := range *subnets {
 			oc.AddOFRules(s.Minion, s.Sub)
