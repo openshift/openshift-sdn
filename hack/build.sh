@@ -37,3 +37,7 @@ go install ${OSDN_GO_PACKAGE}
 cp -f ovssubnet/bin/openshift-sdn-simple-setup-node.sh ${OSDN_GOPATH}/bin
 cp -f ovssubnet/bin/openshift-ovs-subnet ${OSDN_GOPATH}/bin
 cp -f ovssubnet/bin/openshift-sdn-kube-subnet-setup.sh ${OSDN_GOPATH}/bin
+cp -f ipvlan/bin/openshift-ipvlan-subnet ${OSDN_GOPATH}/bin
+cp -f ipvlan/bin/openshift-ipvlan-kube-subnet-setup.sh ${OSDN_GOPATH}/bin
+cp -f ipvlan/bin/openshift-ipvlan-dhclient-script ${OSDN_GOPATH}/bin
+

@@ -1,0 +1,76 @@
+#!/bin/bash
+set -ex
+
+action=$1
+pod_namespace=$2
+pod_name=$3
+net_container=$4
+
+source /etc/openshift-sdn/config.env
+private_ipam_server=${OPENSHIFT_PRIVATE_IPAM_SERVER}
+public_ipam_server=${OPENSHIFT_PUBLIC_IPAM_SERVER}
+public_gateway=${OPENSHIFT_PUBLIC_GATEWAY}
+
+Init() {
+    true
+}
+
+Setup() {
+    pid=$(docker inspect --format "{{.State.Pid}}" ${net_container})
+    private_ip_and_prefix=$(curl ${private_ipam_server}/netutils/ip/)
+    ipvldev=cont${pid}
+
+    # find the interface the default route is pointed at, and make a
+    # ipvlan interface for the container that will be assigned the
+    # container's private IP address
+    defintf=$(ip -4 route | grep default | cut -d' ' -f5)
+    ip link add link ${defintf} ${ipvldev} type ipvlan mode l${OPENSHIFT_IPVLAN_LAYER}
+    ip link set ${ipvldev} up
+
+    mkdir -p /var/run/netns
+    ln -s /proc/$pid/ns/net /var/run/netns/$pid
+    ip link set ${ipvldev} netns $pid
+    ip netns exec $pid ip link set dev ${ipvldev} name eth0
+    ip netns exec $pid ip link set dev eth0 up
+    ip netns exec $pid ip addr add ${private_ip_and_prefix} dev eth0
+    ip netns exec $pid ip link set eth0 up
+
+    if [ -n "${public_ipam_server}" ]; then
+        public_ip_and_prefix=$(curl ${public_ipam_server}/netutils/ip/)
+        ip netns exec $pid ip addr add ${public_ip_and_prefix} dev eth0 label eth0:public
+        ip netns exec $pid ip route add default dev eth0 via ${public_gateway}
+    else
+        # Get a DHCP lease for external network connectivity
+        ip netns exec $pid /sbin/dhclient -B -4 -1 -v -sf /usr/bin/openshift-ipvlan-dhclient-script -pf /run/dhclient-$pid.pid -C ${net_container} eth0
+    fi
+}
+
+Teardown() {
+    pid=$(docker inspect --format "{{.State.Pid}}" ${net_container})
+    tmp=(`ip -o addr show dev eth0 | grep eth0:public`) || true
+    if [ -n "$tmp" ]; then
+        public_ip_and_prefix=${tmp[2]}
+        curl -X DELETE ${public_ipam_server}/netutils/ip/${public_ip_and_prefix} || true
+    else
+        ip netns exec $pid /sbin/dhclient -r -sf /usr/bin/openshift-ipvlan-dhclient-script -pf /run/dhclient-${pid}.pid eth0
+    fi
+    ip netns exec $pid ip link set dev eth0 down
+    ip netns exec $pid ip link del eth0
+    rm -f /var/run/netns/$pid
+}
+
+case "$action" in
+    init)
+	Init
+	;;
+    setup)
+	Setup
+	;;
+    teardown)
+	Teardown
+	;;
+    *)
+        echo "Bad input: $@"
+        exit 1
+esac
+
