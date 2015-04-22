@@ -49,3 +49,11 @@ type Subnet struct {
 	Minion string
 	Sub    string
 }
+
+type PubnetRegistryServer interface {
+	Start(ipAddress string) error
+}
+
+type PubnetRegistryClient interface {
+	GetServerUriAndGateway() (string, string, error)
+}

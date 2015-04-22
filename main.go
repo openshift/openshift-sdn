@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	log "github.com/golang/glog"
+	"github.com/openshift/openshift-sdn/ipvlan"
 	"github.com/openshift/openshift-sdn/ovssubnet"
 	"github.com/openshift/openshift-sdn/pkg/api"
 	"github.com/openshift/openshift-sdn/pkg/registry"
@@ -37,7 +38,8 @@ type CmdLineOpts struct {
 	minion                bool
 	skipsetup             bool
 	sync                  bool
-	kube                  bool
+	kubenet               string
+	publicNetwork         string
 	help                  bool
 }
 
@@ -60,13 +62,22 @@ func init() {
 	flag.BoolVar(&opts.minion, "minion", false, "Run in minion mode")
 	flag.BoolVar(&opts.skipsetup, "skip-setup", false, "Skip the setup when in minion mode")
 	flag.BoolVar(&opts.sync, "sync", false, "Sync the minions directly to etcd-path (Do not wait for PaaS to do so!)")
-	flag.BoolVar(&opts.kube, "kube", false, "Use kubernetes hooks for optimal integration with OVS. This option bypasses the Linux bridge. Any docker containers started manually (not through OpenShift/Kubernetes) will stay local and not connect to the SDN.")
+	flag.StringVar(&opts.kubenet, "kubenet", "", "Use kubernetes hooks for network plugins. This option bypasses the Linux bridge. Any docker containers started manually (not through OpenShift/Kubernetes) will stay local and not connect to the SDN. Allowed plugins are [ kube | ipvlan-l2 | ipvlan-l3 ]")
+	flag.StringVar(&opts.publicNetwork, "public-network", "", "(master only) IP address range of available public network IPs to assign to containers plus the gateway [ eg 192.168.10.5-192.168.10.96/24+192.168.10.1 ]")
 
 	flag.BoolVar(&opts.help, "help", false, "print this message")
 }
 
 func newNetworkManager() (NetworkManager, error) {
-	sub, err := newSubnetRegistry()
+	cfg := &api.EtcdConfig{
+		Endpoints: strings.Split(opts.etcdEndpoints, ","),
+		Keyfile:   opts.etcdKeyfile,
+		Certfile:  opts.etcdCertfile,
+		CAFile:    opts.etcdCAFile,
+		Path:      opts.etcdPath,
+	}
+
+	sub, err := newSubnetRegistry(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -79,29 +90,41 @@ func newNetworkManager() (NetworkManager, error) {
 		host = strings.TrimSpace(string(output))
 	}
 
-	if opts.kube {
+	if opts.kubenet == "kube" {
 		return ovssubnet.NewKubeController(sub, string(host), opts.ip)
+	} else if strings.HasPrefix(opts.kubenet, "ipvlan-") {
+		var pubnetServer api.PubnetRegistryServer
+		var pubnetClient api.PubnetRegistryClient
+		var err error
+
+		if opts.master {
+			pubnetServer, err = registry.NewPubnetServer(cfg, opts.publicNetwork)
+		} else if opts.minion {
+			pubnetClient, err = registry.NewPubnetClient(cfg)
+		}
+		if err != nil {
+			log.Fatalf("Failed to create public network IPAM: %v", err)
+		}
+
+		if opts.kubenet == "ipvlan-l2" {
+			return ipvlan.NewIpvlanController(sub, string(host), opts.ip, 2, pubnetServer, pubnetClient)
+		} else if opts.kubenet == "ipvlan-l3" {
+			return ipvlan.NewIpvlanController(sub, string(host), opts.ip, 3, pubnetServer, pubnetClient)
+		} else {
+			log.Fatalf("Unknown --kubenet option %s", opts.kubenet)
+		}
 	}
+
 	// default OVS controller
 	return ovssubnet.NewDefaultController(sub, string(host), opts.ip)
 }
 
-func newSubnetRegistry() (api.SubnetRegistry, error) {
-	peers := strings.Split(opts.etcdEndpoints, ",")
-
+func newSubnetRegistry(cfg *api.EtcdConfig) (api.SubnetRegistry, error) {
 	subnetPath := path.Join(opts.etcdPath, "subnets")
 	subnetConfigPath := path.Join(opts.etcdPath, "config")
 	minionPath := opts.minionPath
 	if opts.sync {
 		minionPath = path.Join(opts.etcdPath, "minions")
-	}
-
-	cfg := &api.EtcdConfig{
-		Endpoints: peers,
-		Keyfile:   opts.etcdKeyfile,
-		Certfile:  opts.etcdCertfile,
-		CAFile:    opts.etcdCAFile,
-		Path:      opts.etcdPath,
 	}
 
 	return registry.NewEtcdSubnetRegistry(cfg, subnetPath, subnetConfigPath, minionPath)
