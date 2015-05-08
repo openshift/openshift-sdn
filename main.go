@@ -89,7 +89,7 @@ func newSubnetRegistry() (api.SubnetRegistry, error) {
 
 	subnetPath := path.Join(opts.etcdPath, "subnets")
 	subnetConfigPath := path.Join(opts.etcdPath, "config")
-	minionPath := "/registry/minions/"
+	minionPath := "/kubernetes.io/minions/"
 	if opts.sync {
 		minionPath = path.Join(opts.etcdPath, "minions")
 	}
