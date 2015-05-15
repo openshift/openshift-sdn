@@ -7,6 +7,14 @@ const (
 	Deleted EventType = "DELETED"
 )
 
+type EtcdConfig struct {
+	Endpoints []string
+	Keyfile   string
+	Certfile  string
+	CAFile    string
+	Path      string
+}
+
 type SubnetRegistry interface {
 	InitSubnets() error
 	GetSubnets() (*[]Subnet, error)

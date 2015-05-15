@@ -96,17 +96,15 @@ func newSubnetRegistry() (api.SubnetRegistry, error) {
 		minionPath = path.Join(opts.etcdPath, "minions")
 	}
 
-	cfg := &registry.EtcdConfig{
-		Endpoints:        peers,
-		Keyfile:          opts.etcdKeyfile,
-		Certfile:         opts.etcdCertfile,
-		CAFile:           opts.etcdCAFile,
-		SubnetPath:       subnetPath,
-		SubnetConfigPath: subnetConfigPath,
-		MinionPath:       minionPath,
+	cfg := &api.EtcdConfig{
+		Endpoints: peers,
+		Keyfile:   opts.etcdKeyfile,
+		Certfile:  opts.etcdCertfile,
+		CAFile:    opts.etcdCAFile,
+		Path:      opts.etcdPath,
 	}
 
-	return registry.NewEtcdSubnetRegistry(cfg)
+	return registry.NewEtcdSubnetRegistry(cfg, subnetPath, subnetConfigPath, minionPath)
 }
 
 func main() {
