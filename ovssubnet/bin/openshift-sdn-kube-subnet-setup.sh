@@ -65,6 +65,8 @@ function setup() {
     fwd_lineno=$(iptables -nvL FORWARD --line-numbers | grep "reject-with icmp-host-prohibited" tail -n 1 | awk '{print $1}')
     iptables -I FORWARD $fwd_lineno -d ${cluster_subnet} -j ACCEPT
     iptables -I FORWARD $fwd_lineno -s ${cluster_subnet} -j ACCEPT
+    # sysctl for rhel7.1 rhbz#1225410
+    sysctl -w net.bridge.bridge-nf-call-iptables=0
 
     ## docker
     if [[ -z "${DOCKER_NETWORK_OPTIONS}" ]]
