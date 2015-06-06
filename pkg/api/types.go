@@ -7,6 +7,14 @@ const (
 	Deleted EventType = "DELETED"
 )
 
+type EtcdConfig struct {
+	Endpoints []string
+	Keyfile   string
+	Certfile  string
+	CAFile    string
+	Path      string
+}
+
 type SubnetRegistry interface {
 	InitSubnets() error
 	GetSubnets() (*[]Subnet, error)
@@ -40,4 +48,12 @@ type MinionEvent struct {
 type Subnet struct {
 	Minion string
 	Sub    string
+}
+
+type PubnetRegistryServer interface {
+	Start(ipAddress string) error
+}
+
+type PubnetRegistryClient interface {
+	GetServerUriAndGateway() (string, string, error)
 }

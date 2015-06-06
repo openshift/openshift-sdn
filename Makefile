@@ -36,6 +36,12 @@ install:
 	mkdir -p /usr/libexec/kubernetes/kubelet-plugins/net/exec/redhat~openshift-ovs-subnet/
 	cp -f $(OUT_DIR)/local/go/bin/openshift-ovs-subnet /usr/libexec/kubernetes/kubelet-plugins/net/exec/redhat~openshift-ovs-subnet/
 
+	cp -f $(OUT_DIR)/local/go/bin/openshift-ipvlan-subnet /usr/bin/
+	cp -f $(OUT_DIR)/local/go/bin/openshift-ipvlan-kube-subnet-setup.sh /usr/bin/
+	mkdir -p /usr/libexec/kubernetes/kubelet-plugins/net/exec/redhat~openshift-ipvlan-subnet/
+	cp -f $(OUT_DIR)/local/go/bin/openshift-ipvlan-subnet /usr/libexec/kubernetes/kubelet-plugins/net/exec/redhat~openshift-ipvlan-subnet/
+	cp -f $(OUT_DIR)/local/go/bin/openshift-ipvlan-dhclient-script /usr/bin/
+
 # Remove all build artifacts.
 #
 # Example:
