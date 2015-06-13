@@ -8,22 +8,24 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/openshift/openshift-sdn/pkg/iptables"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	netutils_server "github.com/openshift/openshift-sdn/pkg/netutils/server"
+	"github.com/openshift/openshift-sdn/pkg/ovs"
 )
 
 const (
 	ENVFILE = `/run/openshift-sdn/docker-network`
 	LBR     = "lbr0"
+	BR      = "br0"
 	TUN     = "tun0"
 )
 
 type FlowController struct {
+	oc *ovs.OVS
 }
 
 func NewFlowController() *FlowController {
@@ -47,8 +49,14 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 
 	ipt, err := iptables.NewIPTables()
 	if err != nil {
-		return nil
+		return err
 	}
+
+	oc, err := ovs.NewOVS()
+	if err != nil {
+		return err
+	}
+	c.oc = oc
 
 	if !setup_required(gatewayIP, envFile) {
 		return nil
@@ -61,9 +69,39 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 
+	// openvswitch
+	_ = oc.Execute(ovs.DelBridge, BR)
+	rule := []string{BR, "--", "set", "Bridge", BR, "fail-mode=secure"}
+	if err := oc.Execute(ovs.AddBridge, rule...); err != nil {
+		return err
+	}
+	rule = []string{"bridge", BR, "protocols=OpenFlow13"}
+	if err := oc.Execute(ovs.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{BR, "vxlan0"}
+	_ = oc.Execute(ovs.DelPort, rule...)
+
+	rule = []string{BR, "vxlan0", "--", "set", "Interface", "vxlan0", "type=vxlan", `options:remote_ip="flow"`, `options:key="flow"`, "ofport_request=1"}
+	if err := oc.Execute(ovs.AddPort, rule...); err != nil {
+		return err
+	}
+	rule = []string{BR, TUN, "--", "set", "Interface", TUN, "type=internal", "ofport_request=2"}
+	if err := oc.Execute(ovs.AddPort, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{BR, "vovsbr"}
+	_ = oc.Execute(ovs.DelPort, rule...)
+	rule = []string{BR, "vovsbr", "--", "set", "Interface", "vovsbr", "ofport_request=9"}
+	if err := oc.Execute(ovs.AddPort, rule...); err != nil {
+		return err
+	}
+
 	// iptables
 	postrouting := ipt.GetChain(iptables.Nat, "POSTROUTING")
-	rule := []string{"-s", containerNetwork, "!", "-d", containerNetwork, "-j", "MASQUERADE"}
+	rule = []string{"-s", containerNetwork, "!", "-d", containerNetwork, "-j", "MASQUERADE"}
 	_ = postrouting.AddRule(iptables.Delete, rule...)
 	if err := postrouting.AddRule(iptables.Append, rule...); err != nil {
 		return err
@@ -96,6 +134,25 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 
+	//go c.manageLocalIpam(ipnet)
+	rule = []string{BR}
+	if err = oc.Execute(ovs.DelFlows, rule...); err != nil {
+		return err
+	}
+	rule = []string{BR, "cookie=0x0,table=0,priority=50,actions=output:2"}
+	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+	// arp rule
+	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,arp,nw_dst=%s,actions=output:2", gatewayIP.String())}
+	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+	// ip rule
+	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", gatewayIP.String())}
+	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
 	return err
 }
 
@@ -123,21 +180,31 @@ func (c *FlowController) AddOFRules(minionIP, subnet, localIP string) error {
 	if minionIP == localIP {
 		// self, so add the input rules for containers that are not processed through kube-hooks
 		// for the input rules to pods, see the kube-hook
-		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=75,ip,nw_dst=%s,actions=output:9", cookie, subnet)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s,priority=75,arp,nw_dst=%s,actions=output:9", cookie, subnet)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", arprule, o, e)
-		return e
+		// ip rule
+		rule := []string{BR, fmt.Sprintf("table=0,cookie=0x%s,priority=75,ip,nw_dst=%s,actions=output:9", cookie, subnet)}
+		log.Infof("Adding %s", rule)
+		if err := c.oc.Execute(ovs.AddFlow, rule...); err != nil {
+			return err
+		}
+		// arp rule
+		rule = []string{BR, fmt.Sprintf("table=0,cookie=0x%s,priority=75,arp,nw_dst=%s,actions=output:9", cookie, subnet)}
+		log.Info("Adding %s", rule)
+		if err := c.oc.Execute(ovs.AddFlow, rule...); err != nil {
+			return err
+		}
 	} else {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=100,ip,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, subnet, minionIP)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s,priority=100,arp,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, subnet, minionIP)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", arprule, o, e)
-		return e
+		// ip rule
+		rule := []string{BR, fmt.Sprintf("table=0,cookie=0x%s,priority=100,ip,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, subnet, minionIP)}
+		log.Info("Adding %s", rule)
+		if err := c.oc.Execute(ovs.AddFlow, rule...); err != nil {
+			return err
+		}
+		// arp rule
+		rule = []string{BR, fmt.Sprintf("table=0,cookie=0x%s,priority=100,arp,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, subnet, minionIP)}
+		log.Info("Adding %s", rule)
+		if err := c.oc.Execute(ovs.AddFlow, rule...); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -146,21 +213,31 @@ func (c *FlowController) DelOFRules(minion, localIP string) error {
 	log.Infof("Calling del rules for %s", minion)
 	cookie := generateCookie(minion)
 	if minion == localIP {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip,in_port=10", cookie)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp,in_port=10", cookie)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", iprule).CombinedOutput()
-		log.Infof("Output of deleting local ip rules %s (%v)", o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", arprule).CombinedOutput()
-		log.Infof("Output of deleting local arp rules %s (%v)", o, e)
-		return e
+		// ip rule
+		rule := []string{BR, fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip,in_port=10", cookie)}
+		log.Info("Removing %s", rule)
+		if err := c.oc.Execute(ovs.DelFlows, rule...); err != nil {
+			return err
+		}
+		// arp rule
+		rule = []string{BR, fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp,in_port=10", cookie)}
+		log.Info("Removing %s", rule)
+		if err := c.oc.Execute(ovs.DelFlows, rule...); err != nil {
+			return err
+		}
 	} else {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip", cookie)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp", cookie)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", iprule).CombinedOutput()
-		log.Infof("Output of deleting %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", arprule).CombinedOutput()
-		log.Infof("Output of deleting %s: %s (%v)", arprule, o, e)
-		return e
+		// ip rule
+		rule := []string{BR, fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip", cookie)}
+		log.Info("Removing %s", rule)
+		if err := c.oc.Execute(ovs.DelFlows, rule...); err != nil {
+			return err
+		}
+		// arp rule
+		rule = []string{BR, fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp", cookie)}
+		log.Info("Removing %s", rule)
+		if err := c.oc.Execute(ovs.DelFlows, rule...); err != nil {
+			return err
+		}
 	}
 	return nil
 }
