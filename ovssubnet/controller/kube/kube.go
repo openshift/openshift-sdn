@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openshift/openshift-sdn/pkg/iptables"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	netutils_server "github.com/openshift/openshift-sdn/pkg/netutils/server"
 )
@@ -32,7 +33,7 @@ func NewFlowController() *FlowController {
 func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	_, subnet, err := net.ParseCIDR(localSubnet)
 	if err != nil {
-		return err
+		return nil
 	}
 	//s, _ := subnet.Mask.Size()
 	//maskLength := strconv.Itoa(s)
@@ -43,6 +44,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return e
 	}
 	defer envFile.Close()
+
+	ipt, err := iptables.NewIPTables()
+	if err != nil {
+		return nil
+	}
 
 	if !setup_required(gatewayIP, envFile) {
 		return nil
@@ -55,7 +61,42 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 
-	return nil
+	// iptables
+	postrouting := ipt.GetChain(iptables.Nat, "POSTROUTING")
+	rule := []string{"-s", containerNetwork, "!", "-d", containerNetwork, "-j", "MASQUERADE"}
+	_ = postrouting.AddRule(iptables.Delete, rule...)
+	if err := postrouting.AddRule(iptables.Append, rule...); err != nil {
+		return err
+	}
+
+	input := ipt.GetChain("", "INPUT")
+	rule = []string{"-p", "udp", "-m", "multiport", "--dports", "4789", "-m", "comment", "--comment", "001 vxlan incoming", "-j", "ACCEPT"}
+	_ = input.AddRule(iptables.Delete, rule...)
+	if err = input.AddRule(iptables.Insert, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{"-i", TUN, "-m", "comment", "--comment", "traffic from docker for internet", "-j", "ACCEPT"}
+	_ = input.AddRule(iptables.Delete, rule...)
+	if err = input.AddRule(iptables.Insert, rule...); err != nil {
+		return err
+	}
+
+	forward := ipt.GetChain("", "FORWARD")
+	// allow everything from containerNetwork
+	rule = []string{"-d", containerNetwork, "-j", "ACCEPT"}
+	_ = forward.AddRule(iptables.Delete, rule...)
+	if err := forward.AddRule(iptables.Append, rule...); err != nil {
+		return err
+	}
+	// allow everything to containerNetwork
+	rule[0] = "-s"
+	_ = forward.AddRule(iptables.Delete, rule...)
+	if err := forward.AddRule(iptables.Append, rule...); err != nil {
+		return err
+	}
+
+	return err
 }
 
 func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
