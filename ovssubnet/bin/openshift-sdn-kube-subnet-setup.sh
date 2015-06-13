@@ -23,25 +23,9 @@ function setup() {
     # clear config file
     rm -f /etc/openshift-sdn/config.env
 
-    ip link del vlinuxbr || true
-    ip link add vlinuxbr type veth peer name vovsbr
-    ip link set vlinuxbr up
-    ip link set vovsbr up
-    ip link set vlinuxbr txqueuelen 0
-    ip link set vovsbr txqueuelen 0
-
-    ## linux bridge
-    ip link set lbr0 down || true
     brctl delbr lbr0 || true
     brctl addbr lbr0
-    ip addr add ${subnet_gateway}/${subnet_mask_len} dev lbr0
-    ip link set lbr0 up
     brctl addif lbr0 vlinuxbr
-
-    # setup tun address
-    ip addr add ${tun_gateway}/${subnet_mask_len} dev ${TUN}
-    ip link set ${TUN} up
-    ip route add ${cluster_subnet} dev ${TUN} proto kernel scope link
 
     ## docker
     if [[ -z "${DOCKER_NETWORK_OPTIONS}" ]]
@@ -67,9 +51,6 @@ EOF
     # for older ones, br_netfilter may not exist, but is covered by bridge (bridge-utils)
     modprobe br_netfilter || true 
     sysctl -w net.bridge.bridge-nf-call-iptables=0
-
-    # delete the subnet routing entry created because of lbr0
-    ip route del ${subnet} dev lbr0 proto kernel scope link src ${subnet_gateway} || true
 
     mkdir -p /etc/openshift-sdn
     echo "export OPENSHIFT_SDN_TAP1_ADDR=${tun_gateway}" >& "/etc/openshift-sdn/config.env"

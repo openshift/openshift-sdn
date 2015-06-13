@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openshift/openshift-sdn/pkg/ipcmd"
 	"github.com/openshift/openshift-sdn/pkg/iptables"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	netutils_server "github.com/openshift/openshift-sdn/pkg/netutils/server"
@@ -21,6 +22,8 @@ const (
 	ENVFILE = `/run/openshift-sdn/docker-network`
 	LBR     = "lbr0"
 	BR      = "br0"
+	VLBR    = "vlinuxbr"
+	VOVSBR  = "vovsbr"
 	TUN     = "tun0"
 )
 
@@ -37,8 +40,8 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	if err != nil {
 		return nil
 	}
-	//s, _ := subnet.Mask.Size()
-	//maskLength := strconv.Itoa(s)
+	s, _ := subnet.Mask.Size()
+	maskLength := strconv.Itoa(s)
 	gatewayIP := netutils.GenerateDefaultGateway(subnet)
 
 	envFile, e := os.OpenFile(ENVFILE, os.O_RDWR|os.O_CREATE, 0640)
@@ -57,6 +60,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 	c.oc = oc
+
+	ip, err := ipcmd.NewIPCmd()
+	if err != nil {
+		return err
+	}
 
 	if !setup_required(gatewayIP, envFile) {
 		return nil
@@ -92,10 +100,66 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 
-	rule = []string{BR, "vovsbr"}
+	rule = []string{VLBR}
+	_ = ip.Execute(ipcmd.Link, ipcmd.Del, rule...)
+
+	rule = []string{VLBR, "type", "veth", "peer", "name", VOVSBR}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{VLBR, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{VOVSBR, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{VLBR, "txqueuelen", "0"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{VOVSBR, "txqueuelen", "0"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{BR, VOVSBR}
 	_ = oc.Execute(ovs.DelPort, rule...)
-	rule = []string{BR, "vovsbr", "--", "set", "Interface", "vovsbr", "ofport_request=9"}
+	rule = []string{BR, VOVSBR, "--", "set", "Interface", VOVSBR, "ofport_request=9"}
 	if err := oc.Execute(ovs.AddPort, rule...); err != nil {
+		return err
+	}
+
+	// linux bridge
+	rule = []string{LBR, "down"}
+	_ = ip.Execute(ipcmd.Link, ipcmd.Set, rule...)
+
+	rule = []string{gatewayIP.String() + "/" + maskLength, "dev", LBR}
+	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{LBR, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	// setup tun address
+	rule = []string{gatewayIP.String() + "/" + maskLength, "dev", TUN}
+	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+	rule = []string{TUN, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+	rule = []string{containerNetwork, "dev", TUN, "proto", "kernel", "scope", "link"}
+	if err := ip.Execute(ipcmd.Route, ipcmd.Add, rule...); err != nil {
 		return err
 	}
 
