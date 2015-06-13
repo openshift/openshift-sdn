@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openshift/openshift-sdn/pkg/brctl"
 	"github.com/openshift/openshift-sdn/pkg/ipcmd"
 	"github.com/openshift/openshift-sdn/pkg/iptables"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
@@ -62,6 +63,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	c.oc = oc
 
 	ip, err := ipcmd.NewIPCmd()
+	if err != nil {
+		return err
+	}
+
+	brc, err := brctl.NewBrctl()
 	if err != nil {
 		return err
 	}
@@ -139,6 +145,14 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	rule = []string{LBR, "down"}
 	_ = ip.Execute(ipcmd.Link, ipcmd.Set, rule...)
 
+	rule = []string{LBR}
+	_ = brc.Execute(brctl.DelBr, rule...)
+
+	rule = []string{LBR}
+	if err := brc.Execute(brctl.AddBr, rule...); err != nil {
+		return err
+	}
+
 	rule = []string{gatewayIP.String() + "/" + maskLength, "dev", LBR}
 	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
 		return err
@@ -146,6 +160,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 
 	rule = []string{LBR, "up"}
 	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{LBR, VLBR}
+	if err := brc.Execute(brctl.AddIf, rule...); err != nil {
 		return err
 	}
 

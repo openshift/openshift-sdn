@@ -23,10 +23,6 @@ function setup() {
     # clear config file
     rm -f /etc/openshift-sdn/config.env
 
-    brctl delbr lbr0 || true
-    brctl addbr lbr0
-    brctl addif lbr0 vlinuxbr
-
     ## docker
     if [[ -z "${DOCKER_NETWORK_OPTIONS}" ]]
     then
