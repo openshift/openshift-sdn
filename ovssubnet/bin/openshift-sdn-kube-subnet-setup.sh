@@ -19,17 +19,6 @@ function lockwrap() {
     ) 200>${lock_file}
 }
 
-function setup_required() {
-    ip=$(echo `ip a s lbr0 2>/dev/null|awk '/inet / {print $2}'`)
-    if [ "$ip" != "${subnet_gateway}/${subnet_mask_len}" ]; then
-        return 0
-    fi
-    if ! grep -q lbr0 /run/openshift-sdn/docker-network; then
-        return 0
-    fi
-    return 1
-}
-
 function setup() {
     # clear config file
     rm -f /etc/openshift-sdn/config.env
@@ -110,11 +99,6 @@ EOF
     echo "export OPENSHIFT_CLUSTER_SUBNET=${cluster_subnet}" >> "/etc/openshift-sdn/config.env"
 }
 
-set +e
-if ! setup_required; then
-    echo "SDN setup not required."
-    exit 140
-fi
 set -e
 
 lockwrap setup

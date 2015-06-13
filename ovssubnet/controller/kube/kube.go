@@ -1,17 +1,25 @@
 package kube
 
 import (
+	"bufio"
 	"crypto/md5"
 	"fmt"
 	log "github.com/golang/glog"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
-	"syscall"
+	"strings"
 
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	netutils_server "github.com/openshift/openshift-sdn/pkg/netutils/server"
+)
+
+const (
+	ENVFILE = `/run/openshift-sdn/docker-network`
+	LBR     = "lbr0"
+	TUN     = "tun0"
 )
 
 type FlowController struct {
@@ -22,34 +30,32 @@ func NewFlowController() *FlowController {
 }
 
 func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
-	_, ipnet, err := net.ParseCIDR(localSubnet)
-	subnetMaskLength, _ := ipnet.Mask.Size()
-	gateway := netutils.GenerateDefaultGateway(ipnet).String()
-	out, err := exec.Command("openshift-sdn-kube-subnet-setup.sh", gateway, ipnet.String(), containerNetwork, strconv.Itoa(subnetMaskLength), gateway).CombinedOutput()
-	log.Infof("Output of setup script:\n%s", out)
-	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if ok {
-			status := exitErr.ProcessState.Sys().(syscall.WaitStatus)
-			if status.Exited() && status.ExitStatus() == 140 {
-				// valid, do nothing, its just a benevolent restart
-				return nil
-			}
-		}
-		log.Errorf("Error executing setup script. \n\tOutput: %s\n\tError: %v\n", out, err)
-		return err
-	}
-	//go c.manageLocalIpam(ipnet)
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0").CombinedOutput()
+	_, subnet, err := net.ParseCIDR(localSubnet)
 	if err != nil {
 		return err
 	}
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", "cookie=0x0,table=0,priority=50,actions=output:2").CombinedOutput()
-	arprule := fmt.Sprintf("cookie=0x0,table=0,priority=100,arp,nw_dst=%s,actions=output:2", gateway)
-	iprule := fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", gateway)
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-	return err
+	//s, _ := subnet.Mask.Size()
+	//maskLength := strconv.Itoa(s)
+	gatewayIP := netutils.GenerateDefaultGateway(subnet)
+
+	envFile, e := os.OpenFile(ENVFILE, os.O_RDWR|os.O_CREATE, 0640)
+	if e != nil {
+		return e
+	}
+	defer envFile.Close()
+
+	if !setup_required(gatewayIP, envFile) {
+		return nil
+	}
+
+	if _, err := envFile.Seek(0, 0); err != nil {
+		return err
+	}
+	if err := envFile.Truncate(0); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
@@ -116,6 +122,52 @@ func (c *FlowController) DelOFRules(minion, localIP string) error {
 		return e
 	}
 	return nil
+}
+
+func interfaceHasIP(name string, address net.IP) bool {
+	interfaces, e := net.Interfaces()
+	if e != nil {
+		return false
+	}
+	for _, inter := range interfaces {
+		if inter.Name != name {
+			continue
+		}
+		addrs, e := inter.Addrs()
+		if e != nil {
+			return false
+		}
+		for _, addr := range addrs {
+			switch ip := addr.(type) {
+			case *net.IPAddr:
+				// annoyed that fallthrough doesn't work
+				if ip.IP.Equal(address) {
+					return true
+				}
+			case *net.IPNet:
+				if ip.IP.Equal(address) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func setup_required(ip net.IP, envFile *os.File) bool {
+	if !interfaceHasIP(LBR, ip) {
+		return true
+	}
+
+	reader := bufio.NewReader(envFile)
+	contents, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return true
+	}
+	if !strings.Contains(string(contents), LBR) {
+		return true
+	}
+	return false
 }
 
 func generateCookie(ip string) string {
