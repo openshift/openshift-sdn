@@ -64,13 +64,12 @@ export GOPATH=$(pwd)/%{osdn_gopath}:$(pwd)/Godeps/_workspace:%{buildroot}%{gopat
 # Default to building all of the components
 go build %{import_path}
 cp $(pwd)/ovssubnet/bin/openshift-sdn-simple-setup-node.sh $(pwd)/openshift-sdn-simple-setup-node.sh
-cp $(pwd)/ovssubnet/bin/openshift-sdn-kube-subnet-setup.sh $(pwd)/openshift-sdn-kube-subnet-setup.sh
 cp $(pwd)/ovssubnet/bin/openshift-ovs-subnet $(pwd)/openshift-ovs-subnet
 
 %install
 
 install -d %{buildroot}%{_bindir}
-for bin in openshift-sdn openshift-sdn-simple-setup-node.sh openshift-sdn-kube-subnet-setup.sh
+for bin in openshift-sdn openshift-sdn-simple-setup-node.sh
 do
   install -p -m 755 ${bin} %{buildroot}%{_bindir}/${bin}
 done
@@ -96,7 +95,6 @@ install -p -m 0644 rel-eng/docker-sdn-ovs.conf %{buildroot}%{_prefix}/lib/system
 %doc README.md
 %{_bindir}/openshift-sdn
 %{_bindir}/openshift-sdn-simple-setup-node.sh
-%{_bindir}/openshift-sdn-kube-subnet-setup.sh
 %{kube_plugin_path}/openshift-ovs-subnet
 
 %files master

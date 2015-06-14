@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/openshift/openshift-sdn/pkg/brctl"
 	"github.com/openshift/openshift-sdn/pkg/ipcmd"
@@ -39,7 +40,9 @@ export OPENSHIFT_CLUSTER_SUBNET=%s`
 )
 
 type FlowController struct {
-	oc *ovs.OVS
+	lock        sync.Mutex
+	initialized bool
+	oc          *ovs.OVS
 }
 
 func NewFlowController() *FlowController {
@@ -47,6 +50,13 @@ func NewFlowController() *FlowController {
 }
 
 func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if c.initialized {
+		return nil
+	}
+
 	_, subnet, err := net.ParseCIDR(localSubnet)
 	if err != nil {
 		return nil
@@ -283,10 +293,15 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	if l, err := env_writer.WriteString(s); l != len(s) || err != nil {
 		return err
 	}
+
+	c.initialized = true
 	return err
 }
 
 func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
+	if !c.initialized {
+		return fmt.Errorf("FlowController used but never initialized")
+	}
 	ipamHost := "127.0.0.1"
 	ipamPort := uint(9080)
 	inuse := make([]string, 0)
@@ -306,6 +321,9 @@ func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
 }
 
 func (c *FlowController) AddOFRules(minionIP, subnet, localIP string) error {
+	if !c.initialized {
+		return fmt.Errorf("FlowController used but never initialized")
+	}
 	cookie := generateCookie(minionIP)
 	if minionIP == localIP {
 		// self, so add the input rules for containers that are not processed through kube-hooks
@@ -340,6 +358,9 @@ func (c *FlowController) AddOFRules(minionIP, subnet, localIP string) error {
 }
 
 func (c *FlowController) DelOFRules(minion, localIP string) error {
+	if !c.initialized {
+		return fmt.Errorf("FlowController used but never initialized")
+	}
 	log.Infof("Calling del rules for %s", minion)
 	cookie := generateCookie(minion)
 	if minion == localIP {
