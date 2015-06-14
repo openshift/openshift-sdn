@@ -40,9 +40,15 @@ export OPENSHIFT_CLUSTER_SUBNET=%s`
 )
 
 type FlowController struct {
-	lock        sync.Mutex
-	initialized bool
-	oc          *ovs.OVS
+	gatewayIP    string
+	maskLen      string
+	containerNet string
+	lock         sync.Mutex
+	initialized  bool
+	oc           *ovs.OVS
+	ipt          *iptables.IPTables
+	brctl        *brctl.Brctl
+	ipcmd        *ipcmd.IPCmd
 }
 
 func NewFlowController() *FlowController {
@@ -62,8 +68,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return nil
 	}
 	ms, _ := subnet.Mask.Size()
-	maskLength := strconv.Itoa(ms)
+	maskLen := strconv.Itoa(ms)
+	c.maskLen = maskLen
 	gatewayIP := netutils.GenerateDefaultGateway(subnet)
+	c.gatewayIP = gatewayIP.String()
+	c.containerNet = containerNetwork
 
 	envFile, e := os.OpenFile(ENV_FILE, os.O_RDWR|os.O_CREATE, 0640)
 	if e != nil {
@@ -71,31 +80,56 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	}
 	defer envFile.Close()
 
-	ipt, err := iptables.NewIPTables()
-	if err != nil {
-		return err
-	}
-
-	oc, err := ovs.NewOVS()
-	if err != nil {
-		return err
-	}
-	c.oc = oc
-
-	ip, err := ipcmd.NewIPCmd()
-	if err != nil {
-		return err
-	}
-
-	brc, err := brctl.NewBrctl()
-	if err != nil {
-		return err
-	}
-
 	if !setup_required(gatewayIP, envFile) {
 		return nil
 	}
 
+	if err := c.initOVSBridge(); err != nil {
+		return err
+	}
+
+	if err := c.initLinuxBridge(); err != nil {
+		return err
+	}
+
+	if err := c.initTun(); err != nil {
+		return err
+	}
+
+	//go c.manageLocalIpam(ipnet)
+
+	if err := c.initLocalOVSFlows(); err != nil {
+		return err
+	}
+
+	if path, err := exec.LookPath("modprobe"); err == nil {
+		_ = exec.Command(path, "br_netfilter").Run()
+	}
+
+	path, err := exec.LookPath("sysctl")
+	if err != nil {
+		return err
+	}
+	args := []string{"-w", "net.bridge.brdige-nf-call-iptables=0"}
+	err = exec.Command(path, args...).Run()
+	if err != nil {
+		return err
+	}
+
+	// THIS IS A BAD IDEA, PROGRAMS DON'T WRITE IN ETC!!!
+	etcFile, err := os.Create(ETC_FILE)
+	if err != nil {
+		return err
+	}
+	defer etcFile.Close()
+
+	s := fmt.Sprintf(ETC_FMT, c.gatewayIP, containerNetwork)
+	etc_writer := bufio.NewWriter(etcFile)
+	if l, err := etc_writer.WriteString(s); l != len(s) || err != nil {
+		return err
+	}
+
+	// truncate and rewrite the envFile
 	if _, err := envFile.Seek(0, 0); err != nil {
 		return err
 	}
@@ -103,7 +137,101 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 		return err
 	}
 
-	// openvswitch
+	opts := os.Getenv("DOCKER_NETWORK_OPTIONS")
+	if len(opts) == 0 {
+		opts = "-b=" + LBR + " --mtu=1450"
+	}
+	s = fmt.Sprintf(ENV_FMT, opts)
+	env_writer := bufio.NewWriter(envFile)
+	if l, err := env_writer.WriteString(s); l != len(s) || err != nil {
+		return err
+	}
+
+	c.initialized = true
+	return err
+}
+
+func (c *FlowController) initTun() error {
+	ip, err := c.getIPCmd()
+	if err != nil {
+		return err
+	}
+
+	rule := []string{c.gatewayIP + "/" + c.maskLen, "dev", TUN}
+	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+	rule = []string{TUN, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+	rule = []string{c.containerNet, "dev", TUN, "proto", "kernel", "scope", "link"}
+	if err := ip.Execute(ipcmd.Route, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+
+	if err := c.initIPTablesRules(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *FlowController) initLinuxBridge() error {
+	brc, err := c.getBrctl()
+	if err != nil {
+		return err
+	}
+
+	ip, err := c.getIPCmd()
+	if err != nil {
+		return err
+	}
+
+	// linux bridge
+	rule := []string{LBR, "down"}
+	_ = ip.Execute(ipcmd.Link, ipcmd.Set, rule...)
+
+	rule = []string{LBR}
+	_ = brc.Execute(brctl.DelBr, rule...)
+
+	rule = []string{LBR}
+	if err := brc.Execute(brctl.AddBr, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{c.gatewayIP + "/" + c.maskLen, "dev", LBR}
+	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{LBR, "up"}
+	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{LBR, VLBR}
+	if err := brc.Execute(brctl.AddIf, rule...); err != nil {
+		return err
+	}
+
+	rule = []string{c.containerNet, "dev", "lbr0", "proto", "kernel", "scope", "link", "src", c.gatewayIP}
+	if err := ip.Execute(ipcmd.Route, ipcmd.Del, rule...); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *FlowController) initOVSBridge() error {
+	oc, err := c.getOC()
+	if err != nil {
+		return err
+	}
+
+	ip, err := c.getIPCmd()
+	if err != nil {
+		return err
+	}
+
 	_ = oc.Execute(ovs.DelBridge, BR)
 	rule := []string{BR, "--", "set", "Bridge", BR, "fail-mode=secure"}
 	if err := oc.Execute(ovs.AddBridge, rule...); err != nil {
@@ -160,51 +288,93 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	if err := oc.Execute(ovs.AddPort, rule...); err != nil {
 		return err
 	}
+	return nil
+}
 
-	// linux bridge
-	rule = []string{LBR, "down"}
-	_ = ip.Execute(ipcmd.Link, ipcmd.Set, rule...)
+func (c *FlowController) getIPCmd() (*ipcmd.IPCmd, error) {
+	if c.ipcmd != nil {
+		return c.ipcmd, nil
+	}
+	ipcmd, err := ipcmd.NewIPCmd()
+	if err != nil {
+		return nil, err
+	}
+	c.ipcmd = ipcmd
+	return c.ipcmd, nil
+}
 
-	rule = []string{LBR}
-	_ = brc.Execute(brctl.DelBr, rule...)
+func (c *FlowController) getBrctl() (*brctl.Brctl, error) {
+	if c.brctl != nil {
+		return c.brctl, nil
+	}
+	brctl, err := brctl.NewBrctl()
+	if err != nil {
+		return nil, err
+	}
+	c.brctl = brctl
+	return c.brctl, nil
+}
 
-	rule = []string{LBR}
-	if err := brc.Execute(brctl.AddBr, rule...); err != nil {
+func (c *FlowController) getIPT() (*iptables.IPTables, error) {
+	if c.ipt != nil {
+		return c.ipt, nil
+	}
+	ipt, err := iptables.NewIPTables()
+	if err != nil {
+		return nil, err
+	}
+	c.ipt = ipt
+	return c.ipt, nil
+}
+
+func (c *FlowController) getOC() (*ovs.OVS, error) {
+	if c.oc != nil {
+		return c.oc, nil
+	}
+	oc, err := ovs.NewOVS()
+	if err != nil {
+		return nil, err
+	}
+	c.oc = oc
+	return c.oc, nil
+}
+
+func (c *FlowController) initLocalOVSFlows() error {
+	oc, err := c.getOC()
+	if err != nil {
 		return err
 	}
 
-	rule = []string{gatewayIP.String() + "/" + maskLength, "dev", LBR}
-	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
+	rule := []string{BR}
+	if err := oc.Execute(ovs.DelFlows, rule...); err != nil {
 		return err
 	}
+	rule = []string{BR, "cookie=0x0,table=0,priority=50,actions=output:2"}
+	if err := oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+	// arp rule
+	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,arp,nw_dst=%s,actions=output:2", c.gatewayIP)}
+	if err := oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+	// ip rule
+	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", c.gatewayIP)}
+	if err := oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+	return nil
+}
 
-	rule = []string{LBR, "up"}
-	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
-		return err
-	}
-
-	rule = []string{LBR, VLBR}
-	if err := brc.Execute(brctl.AddIf, rule...); err != nil {
-		return err
-	}
-
-	// setup tun address
-	rule = []string{gatewayIP.String() + "/" + maskLength, "dev", TUN}
-	if err := ip.Execute(ipcmd.Addr, ipcmd.Add, rule...); err != nil {
-		return err
-	}
-	rule = []string{TUN, "up"}
-	if err := ip.Execute(ipcmd.Link, ipcmd.Set, rule...); err != nil {
-		return err
-	}
-	rule = []string{containerNetwork, "dev", TUN, "proto", "kernel", "scope", "link"}
-	if err := ip.Execute(ipcmd.Route, ipcmd.Add, rule...); err != nil {
+func (c *FlowController) initIPTablesRules() error {
+	ipt, err := iptables.NewIPTables()
+	if err != nil {
 		return err
 	}
 
 	// iptables
 	postrouting := ipt.GetChain(iptables.Nat, "POSTROUTING")
-	rule = []string{"-s", containerNetwork, "!", "-d", containerNetwork, "-j", "MASQUERADE"}
+	rule := []string{"-s", c.containerNet, "!", "-d", c.containerNet, "-j", "MASQUERADE"}
 	_ = postrouting.AddRule(iptables.Delete, rule...)
 	if err := postrouting.AddRule(iptables.Append, rule...); err != nil {
 		return err
@@ -225,7 +395,7 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 
 	forward := ipt.GetChain("", "FORWARD")
 	// allow everything from containerNetwork
-	rule = []string{"-d", containerNetwork, "-j", "ACCEPT"}
+	rule = []string{"-d", c.containerNet, "-j", "ACCEPT"}
 	_ = forward.AddRule(iptables.Delete, rule...)
 	if err := forward.AddRule(iptables.Append, rule...); err != nil {
 		return err
@@ -236,66 +406,7 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	if err := forward.AddRule(iptables.Append, rule...); err != nil {
 		return err
 	}
-
-	//go c.manageLocalIpam(ipnet)
-	rule = []string{BR}
-	if err = oc.Execute(ovs.DelFlows, rule...); err != nil {
-		return err
-	}
-	rule = []string{BR, "cookie=0x0,table=0,priority=50,actions=output:2"}
-	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
-		return err
-	}
-	// arp rule
-	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,arp,nw_dst=%s,actions=output:2", gatewayIP.String())}
-	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
-		return err
-	}
-	// ip rule
-	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", gatewayIP.String())}
-	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
-		return err
-	}
-
-	if path, err := exec.LookPath("modprobe"); err == nil {
-		_ = exec.Command(path, "br_netfilter").Run()
-	}
-
-	path, err := exec.LookPath("sysctl")
-	if err != nil {
-		return err
-	}
-	args := []string{"-w", "net.bridge.brdige-nf-call-iptables=0"}
-	err = exec.Command(path, args...).Run()
-	if err != nil {
-		return err
-	}
-
-	// THIS IS A BAD IDEA, PROGRAMS DON'T WRITE IN ETC!!!
-	etcFile, err := os.Create(ETC_FILE)
-	if err != nil {
-		return err
-	}
-	defer etcFile.Close()
-
-	s := fmt.Sprintf(ETC_FMT, gatewayIP.String(), containerNetwork)
-	etc_writer := bufio.NewWriter(etcFile)
-	if l, err := etc_writer.WriteString(s); l != len(s) || err != nil {
-		return err
-	}
-
-	opts := os.Getenv("DOCKER_NETWORK_OPTIONS")
-	if len(opts) == 0 {
-		opts = "-b=" + LBR + " --mtu=1450"
-	}
-	s = fmt.Sprintf(ENV_FMT, opts)
-	env_writer := bufio.NewWriter(envFile)
-	if l, err := env_writer.WriteString(s); l != len(s) || err != nil {
-		return err
-	}
-
-	c.initialized = true
-	return err
+	return nil
 }
 
 func (c *FlowController) manageLocalIpam(ipnet *net.IPNet) error {
