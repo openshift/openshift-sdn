@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -20,12 +21,21 @@ import (
 )
 
 const (
-	ENVFILE = `/run/openshift-sdn/docker-network`
-	LBR     = "lbr0"
-	BR      = "br0"
-	VLBR    = "vlinuxbr"
-	VOVSBR  = "vovsbr"
-	TUN     = "tun0"
+	LBR      = "lbr0"
+	BR       = "br0"
+	VLBR     = "vlinuxbr"
+	VOVSBR   = "vovsbr"
+	TUN      = "tun0"
+	ENV_FILE = `/run/openshift-sdn/docker-network`
+	ENV_FMT  = `# This file has been modified by openshift-sdn. Please modify the
+# DOCKER_NETWORK_OPTIONS variable in /etc/sysconfig/openshift-node if this
+# is an integrated install or /etc/sysconfig/openshift-sdn-node if this is a
+# standalone install.
+
+DOCKER_NETWORK_OPTIONS='%s'`
+	ETC_FILE = "/etc/openshift-sdn/config.env"
+	ETC_FMT  = `export OPENSHIFT_SDN_TAP1_ADDR=%s
+export OPENSHIFT_CLUSTER_SUBNET=%s`
 )
 
 type FlowController struct {
@@ -41,11 +51,11 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	if err != nil {
 		return nil
 	}
-	s, _ := subnet.Mask.Size()
-	maskLength := strconv.Itoa(s)
+	ms, _ := subnet.Mask.Size()
+	maskLength := strconv.Itoa(ms)
 	gatewayIP := netutils.GenerateDefaultGateway(subnet)
 
-	envFile, e := os.OpenFile(ENVFILE, os.O_RDWR|os.O_CREATE, 0640)
+	envFile, e := os.OpenFile(ENV_FILE, os.O_RDWR|os.O_CREATE, 0640)
 	if e != nil {
 		return e
 	}
@@ -234,6 +244,43 @@ func (c *FlowController) Setup(localSubnet, containerNetwork string) error {
 	// ip rule
 	rule = []string{BR, fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", gatewayIP.String())}
 	if err = oc.Execute(ovs.AddFlow, rule...); err != nil {
+		return err
+	}
+
+	if path, err := exec.LookPath("modprobe"); err == nil {
+		_ = exec.Command(path, "br_netfilter").Run()
+	}
+
+	path, err := exec.LookPath("sysctl")
+	if err != nil {
+		return err
+	}
+	args := []string{"-w", "net.bridge.brdige-nf-call-iptables=0"}
+	err = exec.Command(path, args...).Run()
+	if err != nil {
+		return err
+	}
+
+	// THIS IS A BAD IDEA, PROGRAMS DON'T WRITE IN ETC!!!
+	etcFile, err := os.Create(ETC_FILE)
+	if err != nil {
+		return err
+	}
+	defer etcFile.Close()
+
+	s := fmt.Sprintf(ETC_FMT, gatewayIP.String(), containerNetwork)
+	etc_writer := bufio.NewWriter(etcFile)
+	if l, err := etc_writer.WriteString(s); l != len(s) || err != nil {
+		return err
+	}
+
+	opts := os.Getenv("DOCKER_NETWORK_OPTIONS")
+	if len(opts) == 0 {
+		opts = "-b=" + LBR + " --mtu=1450"
+	}
+	s = fmt.Sprintf(ENV_FMT, opts)
+	env_writer := bufio.NewWriter(envFile)
+	if l, err := env_writer.WriteString(s); l != len(s) || err != nil {
 		return err
 	}
 	return err
