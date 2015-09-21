@@ -11,7 +11,6 @@ import (
 
 	"github.com/openshift/openshift-sdn/ovssubnet/api"
 	"github.com/openshift/openshift-sdn/ovssubnet/controller/kube"
-	"github.com/openshift/openshift-sdn/ovssubnet/controller/lbr"
 	"github.com/openshift/openshift-sdn/ovssubnet/controller/multitenant"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 )
@@ -59,14 +58,6 @@ func NewMultitenantController(sub api.SubnetRegistry, hostname string, selfIP st
 	return mtController, err
 }
 
-func NewDefaultController(sub api.SubnetRegistry, hostname string, selfIP string, ready chan struct{}) (*OvsController, error) {
-	defaultController, err := NewController(sub, hostname, selfIP, ready)
-	if err == nil {
-		defaultController.flowController = lbr.NewFlowController()
-	}
-	return defaultController, err
-}
-
 func NewController(sub api.SubnetRegistry, hostname string, selfIP string, ready chan struct{}) (*OvsController, error) {
 	if selfIP == "" {
 		var err error
@@ -90,18 +81,15 @@ func NewController(sub api.SubnetRegistry, hostname string, selfIP string, ready
 }
 
 func (oc *OvsController) StartMaster(sync bool, containerNetwork string, containerSubnetLength uint, serviceNetwork string) error {
+	if sync {
+		panic("sync is no longer supported")
+	}
+
 	// wait a minute for etcd to come alive
 	status := oc.subnetRegistry.CheckEtcdIsAlive(60)
 	if !status {
 		log.Errorf("Etcd not running?")
 		return errors.New("Etcd not reachable. Sync cluster check failed.")
-	}
-	// initialize the node key
-	if sync {
-		err := oc.subnetRegistry.InitNodes()
-		if err != nil {
-			log.Infof("Node path already initialized.")
-		}
 	}
 
 	// initialize the subnet key?
@@ -317,12 +305,8 @@ func (oc *OvsController) syncWithMaster() error {
 }
 
 func (oc *OvsController) StartNode(sync, skipsetup bool, mtu uint) error {
-	if sync {
-		err := oc.syncWithMaster()
-		if err != nil {
-			log.Errorf("Failed to register with master: %v", err)
-			return err
-		}
+	if sync || skipsetup {
+		panic("sync and skipsetup are no longer supported")
 	}
 	err := oc.initSelfSubnet()
 	if err != nil {
@@ -331,22 +315,19 @@ func (oc *OvsController) StartNode(sync, skipsetup bool, mtu uint) error {
 	}
 
 	// call flow controller's setup
-	if !skipsetup {
-		// Assume we are working with IPv4
-		containerNetwork, err := oc.subnetRegistry.GetContainerNetwork()
-		if err != nil {
-			log.Errorf("Failed to obtain ContainerNetwork: %v", err)
-			return err
-		}
-		servicesNetwork, err := oc.subnetRegistry.GetServicesNetwork()
-		if err != nil {
-			log.Errorf("Failed to obtain ServicesNetwork: %v", err)
-			return err
-		}
-		err = oc.flowController.Setup(oc.localSubnet.SubnetIP, containerNetwork, servicesNetwork, mtu)
-		if err != nil {
-			return err
-		}
+	containerNetwork, err := oc.subnetRegistry.GetContainerNetwork()
+	if err != nil {
+		log.Errorf("Failed to obtain ContainerNetwork: %v", err)
+		return err
+	}
+	servicesNetwork, err := oc.subnetRegistry.GetServicesNetwork()
+	if err != nil {
+		log.Errorf("Failed to obtain ServicesNetwork: %v", err)
+		return err
+	}
+	err = oc.flowController.Setup(oc.localSubnet.SubnetIP, containerNetwork, servicesNetwork, mtu)
+	if err != nil {
+		return err
 	}
 
 	result, err := oc.watchAndGetResource("HostSubnet")

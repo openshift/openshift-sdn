@@ -23,10 +23,7 @@
 #  -node=false: Run in node mode
 #  -public-ip="": Publicly reachable IP address of this host (for node
 #   mode).
-#  -skip-setup=false: Skip the setup when in node mode
 #  -stderrthreshold=0: logs at or above this threshold go to stderr
-#  -sync=false: Sync the nodes directly to etcd-path (Do not wait
-#    for PaaS to do so!)
 #  -v=0: log level for V logs
 #  -vmodule=: comma-separated list of pattern=N settings for
 #    file-filtered logging
