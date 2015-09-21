@@ -82,8 +82,6 @@ Some requirements, some silly errors.
 
  - openshift-sdn fails with errors around ovs-vsctl.. 
 	yum -y install openvswitch && systemctl enable openvswitch && systemctl start openvswitch
- - openshift-sdn fails to start with errors relating to 'network not up' etc.
-	systemctl stop NetworkManager # that fella is nosy, does not like mint new bridges
  - openshift-sdn fails to start saying cannot reach etcd endpoints
 	etcd not running really or not listening on public interface? That machine not reachable possibly? -etcd-endpoints=https?? without ssl being supplied? Remove the trailing '/' from the url maybe?
  - openshift-sdn is up, I think I got the subnet, but my pings do not work
@@ -101,7 +99,3 @@ An optimzed solution that eliminates the long-path to just a single veth-pair br
 Latency | 112us | 84us | 82us
 
 The optimized solution is available for use with OpenShift/Kubernetes only. Use '-kube' option with openshift-sdn on all hosts. And use the network_plugin for OpenShift/Kubernetes as 'redhat/openshift-ovs-subet'.
-
-#### TODO
-
- - Network isolation between groups of containers
