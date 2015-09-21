@@ -85,7 +85,7 @@ func NewController(sub api.SubnetRegistry, hostname string, selfIP string, ready
 		VNIDMap:         make(map[string]uint),
 		sig:             make(chan struct{}),
 		ready:           ready,
-		AdminNamespaces: make([]string, 0),
+		AdminNamespaces: []string{"default"},
 	}, nil
 }
 
