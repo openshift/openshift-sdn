@@ -16,6 +16,7 @@ export GOPATH
 
 ALL_TESTS="
 pkg/exec
+pkg/ipcmd
 pkg/netutils
 pkg/netutils/server
 pkg/ovs
