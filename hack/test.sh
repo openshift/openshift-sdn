@@ -18,6 +18,7 @@ ALL_TESTS="
 pkg/exec
 pkg/netutils
 pkg/netutils/server
+pkg/ovs
 "
 for test in ${WHAT:-${ALL_TESTS}}; do
     go test -v github.com/openshift/openshift-sdn/${test}
