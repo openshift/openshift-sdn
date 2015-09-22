@@ -3,7 +3,6 @@ package kube
 import (
 	"encoding/hex"
 	"fmt"
-	log "github.com/golang/glog"
 	"io/ioutil"
 	"net"
 	"os/exec"
@@ -16,9 +15,12 @@ import (
 )
 
 const (
-	BR  = "br0"
-	LBR = "lbr0"
-	TUN = "tun0"
+	BR       = "br0"
+	LBR      = "lbr0"
+	TUN      = "tun0"
+	VLINUXBR = "vlinuxbr"
+	VOVSBR   = "vovsbr"
+	VXLAN    = "vxlan0"
 )
 
 type FlowController struct {
@@ -82,22 +84,71 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 		return err
 	}
 
-	out, err := exec.Command("openshift-sdn-kube-subnet-setup.sh", localSubnetGateway, localSubnetCIDR, fmt.Sprint(localSubnetMaskLength), clusterNetworkCIDR, servicesNetworkCIDR, fmt.Sprint(mtu)).CombinedOutput()
-	log.Infof("Output of setup script:\n%s", out)
+	itx := ipcmd.NewTransaction(VLINUXBR)
+	itx.DeleteLink()
+	itx.IgnoreError()
+	itx.AddLink("type", "veth", "peer", "name", VOVSBR)
+	itx.SetLink("up")
+	itx.SetLink("txqueuelen", "0")
+	err = itx.EndTransaction()
 	if err != nil {
-		log.Errorf("Error executing setup script. \n\tOutput: %s\n\tError: %v\n", out, err)
 		return err
 	}
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0").CombinedOutput()
+
+	itx = ipcmd.NewTransaction(VOVSBR)
+	itx.SetLink("up")
+	itx.SetLink("txqueuelen", "0")
+	err = itx.EndTransaction()
 	if err != nil {
 		return err
 	}
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", "cookie=0x0,table=0,priority=50,actions=output:2").CombinedOutput()
-	arprule := fmt.Sprintf("cookie=0x0,table=0,priority=100,arp,nw_dst=%s,actions=output:2", localSubnetGateway)
-	iprule := fmt.Sprintf("cookie=0x0,table=0,priority=100,ip,nw_dst=%s,actions=output:2", localSubnetGateway)
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-	return err
+
+	itx = ipcmd.NewTransaction(LBR)
+	itx.SetLink("down")
+	itx.IgnoreError()
+	itx.DeleteLink()
+	itx.IgnoreError()
+	itx.AddLink("type", "bridge")
+	itx.AddAddress(localSubnetGateway)
+	itx.DeleteRoute(localSubnetCIDR, "proto", "kernel", "scope", "link", "src", localSubnetGateway)
+	itx.SetLink("up")
+	itx.AddSlave(VLINUXBR)
+	err = itx.EndTransaction()
+	if err != nil {
+		return err
+	}
+
+	otx := ovs.NewTransaction(BR)
+	otx.AddBridge("fail-mode=secure", "protocols=OpenFlow13")
+	otx.AddPort(VXLAN, 1, "type=vxlan", `options:remote_ip="flow"`, `options:key="flow"`)
+	otx.AddPort(TUN, 2, "type=internal")
+	otx.AddPort(VOVSBR, 9)
+	otx.AddFlow("table=0,priority=100,arp,nw_dst=%s,actions=output:2", localSubnetGateway)
+	otx.AddFlow("table=0,priority=100,ip,nw_dst=%s,actions=output:2", localSubnetGateway)
+	otx.AddFlow("table=0,priority=75,ip,nw_dst=%s,actions=output:9", localSubnetCIDR)
+	otx.AddFlow("table=0,priority=75,arp,nw_dst=%s,actions=output:9", localSubnetCIDR)
+	otx.AddFlow("table=0,priority=50,actions=output:2")
+	err = otx.EndTransaction()
+	if err != nil {
+		return err
+	}
+
+	itx = ipcmd.NewTransaction(TUN)
+	itx.AddAddress(localSubnetGateway)
+	itx.SetLink("up")
+	itx.AddRoute(clusterNetworkCIDR, "proto", "kernel", "scope", "link")
+	err = itx.EndTransaction()
+	if err != nil {
+		return err
+	}
+
+	// Cleanup docker0 since docker won't
+	itx = ipcmd.NewTransaction("docker0")
+	itx.SetLink("down")
+	itx.IgnoreError()
+	itx.DeleteLink()
+	itx.IgnoreError()
+	_ = itx.EndTransaction()
 
 	// Enable IP forwarding for ipv4 packets
 	_, err = exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").CombinedOutput()
@@ -113,50 +164,27 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 }
 
 func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) error {
-	cookie := generateCookie(nodeIP)
 	if nodeIP == localIP {
-		// self, so add the input rules for containers that are not processed through kube-hooks
-		// for the input rules to pods, see the kube-hook
-		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=75,ip,nw_dst=%s,actions=output:9", cookie, nodeSubnetCIDR)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s,priority=75,arp,nw_dst=%s,actions=output:9", cookie, nodeSubnetCIDR)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", arprule, o, e)
-		return e
-	} else {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=100,ip,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, nodeSubnetCIDR, nodeIP)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s,priority=100,arp,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, nodeSubnetCIDR, nodeIP)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
-		log.Infof("Output of adding %s: %s (%v)", arprule, o, e)
-		return e
+		return nil
 	}
-	return nil
+
+	cookie := generateCookie(nodeIP)
+	otx := ovs.NewTransaction(BR)
+	otx.AddFlow("table=0,cookie=0x%s,priority=100,ip,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, nodeSubnetCIDR, nodeIP)
+	otx.AddFlow("table=0,cookie=0x%s,priority=100,arp,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, nodeSubnetCIDR, nodeIP)
+	return otx.EndTransaction()
 }
 
 func (c *FlowController) DelOFRules(nodeIP, localIP string) error {
-	log.Infof("Calling del rules for %s", nodeIP)
-	cookie := generateCookie(nodeIP)
 	if nodeIP == localIP {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip,in_port=10", cookie)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp,in_port=10", cookie)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", iprule).CombinedOutput()
-		log.Infof("Output of deleting local ip rules %s (%v)", o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", arprule).CombinedOutput()
-		log.Infof("Output of deleting local arp rules %s (%v)", o, e)
-		return e
-	} else {
-		iprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip", cookie)
-		arprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp", cookie)
-		o, e := exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", iprule).CombinedOutput()
-		log.Infof("Output of deleting %s: %s (%v)", iprule, o, e)
-		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", arprule).CombinedOutput()
-		log.Infof("Output of deleting %s: %s (%v)", arprule, o, e)
-		return e
+		return nil
 	}
-	return nil
+
+	cookie := generateCookie(nodeIP)
+	otx := ovs.NewTransaction(BR)
+	otx.DeleteFlows("table=0,cookie=0x%s/0xffffffff,ip", cookie)
+	otx.DeleteFlows("table=0,cookie=0x%s/0xffffffff,arp", cookie)
+	return otx.EndTransaction()
 }
 
 func generateCookie(ip string) string {
