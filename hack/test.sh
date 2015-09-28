@@ -15,6 +15,7 @@ GOPATH=${OSDN_ROOT}/_output:${OSDN_ROOT}/Godeps/_workspace
 export GOPATH
 
 ALL_TESTS="
+pkg/exec
 pkg/netutils
 pkg/netutils/server
 "
