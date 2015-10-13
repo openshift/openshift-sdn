@@ -27,7 +27,8 @@ const (
 
 type OvsController struct {
 	subnetRegistry  api.SubnetRegistry
-	localIP         string
+	nodeIP          string
+	nodeNetwork     *net.IPNet
 	localSubnet     *api.Subnet
 	hostName        string
 	subnetAllocator *netutils.SubnetAllocator
@@ -42,8 +43,8 @@ type OvsController struct {
 type FlowController interface {
 	Setup(localSubnetCIDR, clusterNetworkCIDR, serviceNetworkCIDR string, mtu uint) error
 
-	AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) error
-	DelOFRules(nodeIP, localIP string) error
+	AddOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNet *net.IPNet) error
+	DelOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNet *net.IPNet) error
 
 	AddServiceOFRules(netID uint, IP string, protocol api.ServiceProtocol, port uint) error
 	DelServiceOFRules(netID uint, IP string, protocol api.ServiceProtocol, port uint) error
@@ -76,9 +77,14 @@ func NewController(sub api.SubnetRegistry, hostname string, selfIP string, ready
 		}
 	}
 	log.Infof("Self IP: %s.", selfIP)
+	selfNet, err := netutils.GetNodeSubnet(selfIP)
+	if err != nil {
+		return nil, err
+	}
 	return &OvsController{
 		subnetRegistry:  sub,
-		localIP:         selfIP,
+		nodeIP:          selfIP,
+		nodeNetwork:     selfNet,
 		hostName:        hostname,
 		localSubnet:     nil,
 		subnetAllocator: nil,
@@ -369,7 +375,7 @@ func (oc *OvsController) StartNode(mtu uint) error {
 	}
 	subnets := result.([]api.Subnet)
 	for _, s := range subnets {
-		oc.flowController.AddOFRules(s.NodeIP, s.SubnetCIDR, oc.localIP)
+		oc.flowController.AddOFRules(s.NodeIP, s.SubnetCIDR, oc.nodeIP, oc.nodeNetwork)
 	}
 	if oc.isMultitenant() {
 		result, err := oc.watchAndGetResource("NetNamespace")
@@ -567,10 +573,10 @@ func (oc *OvsController) watchCluster(ready chan<- bool, start <-chan string) {
 			switch ev.Type {
 			case api.Added:
 				// add openflow rules
-				oc.flowController.AddOFRules(ev.Subnet.NodeIP, ev.Subnet.SubnetCIDR, oc.localIP)
+				oc.flowController.AddOFRules(ev.Subnet.NodeIP, ev.Subnet.SubnetCIDR, oc.nodeIP, oc.nodeNetwork)
 			case api.Deleted:
 				// delete openflow rules meant for the node
-				oc.flowController.DelOFRules(ev.Subnet.NodeIP, oc.localIP)
+				oc.flowController.DelOFRules(ev.Subnet.NodeIP, ev.Subnet.SubnetCIDR, oc.nodeIP, oc.nodeNetwork)
 			}
 		case <-oc.sig:
 			stop <- true
