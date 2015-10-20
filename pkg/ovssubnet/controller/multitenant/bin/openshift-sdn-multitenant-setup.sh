@@ -12,9 +12,6 @@ printf 'Container network is "%s"; local host has subnet "%s", mtu "%d" and gate
 TUN=tun0
 
 function setup() {
-    # clear config file
-    rm -f /etc/openshift-sdn/config.env
-
     ## openvswitch
     ovs-vsctl del-br br0 || true
     ovs-vsctl add-br br0 -- set Bridge br0 fail-mode=secure
@@ -93,9 +90,6 @@ function setup() {
 
     # delete the subnet routing entry created because of lbr0
     ip route del ${local_subnet_cidr} dev lbr0 proto kernel scope link src ${local_subnet_gateway} || true
-
-    mkdir -p /etc/openshift-sdn
-    echo "export OPENSHIFT_CLUSTER_SUBNET=${cluster_network_cidr}" >> "/etc/openshift-sdn/config.env"
 }
 
 setup

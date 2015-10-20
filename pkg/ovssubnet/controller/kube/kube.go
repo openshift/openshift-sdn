@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	log "github.com/golang/glog"
+	"io/ioutil"
 	"net"
 	"os/exec"
 	"strings"
@@ -72,6 +73,12 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 	localSubnetGateway := netutils.GenerateDefaultGateway(ipnet).String()
 	if alreadySetUp(fmt.Sprintf("%s/%s", localSubnetGateway, localSubnetMaskLength)) {
 		return nil
+	}
+
+	config := fmt.Sprintf("export OPENSHIFT_CLUSTER_SUBNET=%s", clusterNetworkCIDR)
+	err = ioutil.WriteFile("/run/openshift/config.env", []byte(config), 0644)
+	if err != nil {
+		return err
 	}
 
 	out, err := exec.Command("openshift-sdn-kube-subnet-setup.sh", localSubnetGateway, localSubnetCIDR, fmt.Sprint(localSubnetMaskLength), clusterNetworkCIDR, servicesNetworkCIDR, fmt.Sprint(mtu)).CombinedOutput()
