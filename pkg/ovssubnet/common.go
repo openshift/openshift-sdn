@@ -8,6 +8,7 @@ import (
 
 	log "github.com/golang/glog"
 
+	"github.com/openshift/openshift-sdn/pkg/exec"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	"github.com/openshift/openshift-sdn/pkg/ovssubnet/api"
 	"github.com/openshift/openshift-sdn/pkg/ovssubnet/controller/kube"
@@ -334,7 +335,15 @@ func (oc *OvsController) StartNode(mtu uint) error {
 		return err
 	}
 
-	// Assume we are working with IPv4
+	out, err := exec.Exec("openshift-docker-network-config.sh", fmt.Sprint(mtu))
+	if out != "" {
+		log.Info(out)
+	}
+	if err != nil {
+		log.Errorf("Failed to configure docker networking: %v", err)
+		return err
+	}
+
 	clusterNetworkCIDR, err := oc.subnetRegistry.GetClusterNetworkCIDR()
 	if err != nil {
 		log.Errorf("Failed to obtain ClusterNetwork: %v", err)
