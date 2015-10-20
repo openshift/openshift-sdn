@@ -18,6 +18,7 @@ import (
 const (
 	BR  = "br0"
 	LBR = "lbr0"
+	TUN = "tun0"
 )
 
 type FlowController struct {
@@ -97,6 +98,18 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
 	_, err = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", iprule).CombinedOutput()
 	return err
+
+	// Enable IP forwarding for ipv4 packets
+	_, err = exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Could not enable IPv4 forwarding: %s", err)
+	}
+	_, err = exec.Command("sysctl", "-w", fmt.Sprintf("net.ipv4.conf.%s.forwarding=1", TUN)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Could not enable IPv4 forwarding on %s: %s", TUN, err)
+	}
+
+	return nil
 }
 
 func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) error {

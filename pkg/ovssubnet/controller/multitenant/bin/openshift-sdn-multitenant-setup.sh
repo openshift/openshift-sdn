@@ -84,10 +84,6 @@ function setup() {
     ip link set docker0 down || true
     brctl delbr docker0 || true
 
-    # enable IP forwarding for ipv4 packets
-    sysctl -w net.ipv4.ip_forward=1
-    sysctl -w net.ipv4.conf.${TUN}.forwarding=1
-
     # delete the subnet routing entry created because of lbr0
     ip route del ${local_subnet_cidr} dev lbr0 proto kernel scope link src ${local_subnet_gateway} || true
 }
