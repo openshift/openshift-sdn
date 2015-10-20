@@ -7,10 +7,16 @@ import (
 	"net"
 	"os/exec"
 	"strings"
-	"syscall"
 
+	"github.com/openshift/openshift-sdn/pkg/ipcmd"
 	"github.com/openshift/openshift-sdn/pkg/netutils"
+	"github.com/openshift/openshift-sdn/pkg/ovs"
 	"github.com/openshift/openshift-sdn/pkg/ovssubnet/api"
+)
+
+const (
+	BR  = "br0"
+	LBR = "lbr0"
 )
 
 type FlowController struct {
@@ -20,21 +26,57 @@ func NewFlowController() *FlowController {
 	return &FlowController{}
 }
 
+func alreadySetUp(localSubnetGatewayCIDR string) bool {
+	var found bool
+
+	itx := ipcmd.NewTransaction(LBR)
+	addrs, err := itx.GetAddresses()
+	itx.EndTransaction()
+	if err != nil {
+		return false
+	}
+	found = false
+	for _, addr := range addrs {
+		if addr == localSubnetGatewayCIDR {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+
+	otx := ovs.NewTransaction(BR)
+	flows, err := otx.DumpFlows()
+	otx.EndTransaction()
+	if err != nil {
+		return false
+	}
+	found = false
+	for _, flow := range flows {
+		if strings.Contains(flow, "NXM_NX_TUN_IPV4") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+
+	return true
+}
+
 func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetworkCIDR string, mtu uint) error {
 	_, ipnet, err := net.ParseCIDR(localSubnetCIDR)
 	localSubnetMaskLength, _ := ipnet.Mask.Size()
 	localSubnetGateway := netutils.GenerateDefaultGateway(ipnet).String()
+	if alreadySetUp(fmt.Sprintf("%s/%s", localSubnetGateway, localSubnetMaskLength)) {
+		return nil
+	}
+
 	out, err := exec.Command("openshift-sdn-multitenant-setup.sh", localSubnetGateway, localSubnetCIDR, fmt.Sprint(localSubnetMaskLength), clusterNetworkCIDR, servicesNetworkCIDR, fmt.Sprint(mtu)).CombinedOutput()
 	log.Infof("Output of setup script:\n%s", out)
 	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if ok {
-			status := exitErr.ProcessState.Sys().(syscall.WaitStatus)
-			if status.Exited() && status.ExitStatus() == 140 {
-				// valid, do nothing, its just a benevolent restart
-				return nil
-			}
-		}
 		log.Errorf("Error executing setup script. \n\tOutput: %s\n\tError: %v\n", out, err)
 		return err
 	}

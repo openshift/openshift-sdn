@@ -11,17 +11,6 @@ mtu=$6
 printf 'Container network is "%s"; local host has subnet "%s", mtu "%d" and gateway "%s".\n' "${cluster_network_cidr}" "${local_subnet_cidr}" "${mtu}" "${local_subnet_gateway}"
 TUN=tun0
 
-function setup_required() {
-    ip=$(echo `ip a s lbr0 2>/dev/null|awk '/inet / {print $2}'`)
-    if [ "$ip" != "${local_subnet_gateway}/${local_subnet_mask_len}" ]; then
-        return 0
-    fi
-    if ! ovs-ofctl -O OpenFlow13 dump-flows br0 | grep -q 'table=0.*arp'; then
-        return 0
-    fi
-    return 1
-}
-
 function setup() {
     # clear config file
     rm -f /etc/openshift-sdn/config.env
@@ -71,12 +60,5 @@ function setup() {
     mkdir -p /etc/openshift-sdn
     echo "export OPENSHIFT_CLUSTER_SUBNET=${cluster_network_cidr}" >> "/etc/openshift-sdn/config.env"
 }
-
-set +e
-if ! setup_required; then
-    echo "SDN setup not required."
-    exit 140
-fi
-set -e
 
 setup
