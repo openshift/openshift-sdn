@@ -69,6 +69,14 @@ func NewMultitenantController(sub api.SubnetRegistry, hostname string, selfIP st
 }
 
 func NewController(sub api.SubnetRegistry, hostname string, selfIP string, ready chan struct{}) (*OvsController, error) {
+	if hostname == "" {
+		output, err := kexec.New().Command("uname", "-n").CombinedOutput()
+		if err != nil {
+			log.Fatalf("SDN initialization failed: %v", err)
+		}
+		hostname = strings.TrimSpace(string(output))
+	}
+
 	if selfIP == "" {
 		var err error
 		selfIP, err = GetNodeIP(hostname)
