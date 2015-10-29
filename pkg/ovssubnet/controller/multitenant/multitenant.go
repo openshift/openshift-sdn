@@ -41,7 +41,7 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 	return nil
 }
 
-func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) error {
+func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNetwork *net.IPNet) error {
 	if nodeIP == localIP {
 		return nil
 	}
@@ -56,7 +56,7 @@ func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) erro
 	return e
 }
 
-func (c *FlowController) DelOFRules(nodeIP, localIP string) error {
+func (c *FlowController) DelOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNetwork *net.IPNet) error {
 	if nodeIP == localIP {
 		return nil
 	}

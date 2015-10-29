@@ -49,7 +49,7 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 	return err
 }
 
-func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) error {
+func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNetwork *net.IPNet) error {
 	cookie := generateCookie(nodeIP)
 	if nodeIP == localIP {
 		// self, so add the input rules for containers that are not processed through kube-hooks
@@ -60,6 +60,10 @@ func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) erro
 		log.Infof("Output of adding %s: %s (%v)", iprule, o, e)
 		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "add-flow", "br0", arprule).CombinedOutput()
 		log.Infof("Output of adding %s: %s (%v)", arprule, o, e)
+		return e
+	} else if localNetwork.Contains(net.ParseIP(nodeIP)) {
+		o, e := exec.Command("ip", "route", "add", nodeSubnetCIDR, "via", nodeIP).CombinedOutput()
+		log.Infof("Output of adding ip route: %s (%v)", o, e)
 		return e
 	} else {
 		iprule := fmt.Sprintf("table=0,cookie=0x%s,priority=100,ip,nw_dst=%s,actions=set_field:%s->tun_dst,output:1", cookie, nodeSubnetCIDR, nodeIP)
@@ -73,7 +77,7 @@ func (c *FlowController) AddOFRules(nodeIP, nodeSubnetCIDR, localIP string) erro
 	return nil
 }
 
-func (c *FlowController) DelOFRules(nodeIP, localIP string) error {
+func (c *FlowController) DelOFRules(nodeIP, nodeSubnetCIDR, localIP string, localNetwork *net.IPNet) error {
 	log.Infof("Calling del rules for %s", nodeIP)
 	cookie := generateCookie(nodeIP)
 	if nodeIP == localIP {
@@ -84,6 +88,12 @@ func (c *FlowController) DelOFRules(nodeIP, localIP string) error {
 		o, e = exec.Command("ovs-ofctl", "-O", "OpenFlow13", "del-flows", "br0", arprule).CombinedOutput()
 		log.Infof("Output of deleting local arp rules %s (%v)", o, e)
 		return e
+	} else if localNetwork.Contains(net.ParseIP(nodeIP)) {
+		o, e := exec.Command("ip", "route", "delete", nodeSubnetCIDR, "via", nodeIP).CombinedOutput()
+		if e != nil {
+			log.Infof("Output of deleting ip route (ignored): %s (%v)", o, e)
+		}
+		return nil
 	} else {
 		iprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,ip", cookie)
 		arprule := fmt.Sprintf("table=0,cookie=0x%s/0xffffffff,arp", cookie)
