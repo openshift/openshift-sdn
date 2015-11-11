@@ -14,9 +14,29 @@ func (oc *OvsController) VnidStartMaster() error {
 	getNamespaces := func(registry *Registry) (interface{}, string, error) {
 		return registry.GetNamespaces()
 	}
-	_, err := oc.watchAndGetResource("Namespace", watchNamespaces, getNamespaces)
+	result, err := oc.watchAndGetResource("Namespace", watchNamespaces, getNamespaces)
 	if err != nil {
 		return err
+	}
+	namespaces := result.([]string)
+
+	// Handle existing namespaces without corresponding netnamespaces
+	netnsList, _, err := oc.Registry.GetNetNamespaces()
+	if err != nil {
+		return err
+	}
+	netNamespaceMap := make(map[string]bool, len(netnsList))
+	for _, netns := range netnsList {
+		netNamespaceMap[netns.Name] = true
+	}
+
+	for _, nsName := range namespaces {
+		if !netNamespaceMap[nsName] {
+			err = oc.Registry.CreateNetNamespace(nsName)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -30,11 +50,7 @@ func watchNamespaces(oc *OvsController, ready chan<- bool, start <-chan string) 
 		case ev := <-nsevent:
 			switch ev.Type {
 			case api.Added:
-				_, err := oc.Registry.GetNetNamespace(ev.Name)
-				if err == nil {
-					continue
-				}
-				err = oc.Registry.CreateNetNamespace(ev.Name)
+				err := oc.Registry.CreateNetNamespace(ev.Name)
 				if err != nil {
 					log.Errorf("Error creating NetNamespace: %v", err)
 					continue
