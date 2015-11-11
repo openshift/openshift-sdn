@@ -161,7 +161,7 @@ func (p *ProjectOptions) GetNetID(name string) (uint, error) {
 
 	for _, netNs := range netNamespaces.Items {
 		if name == netNs.ObjectMeta.Name {
-			return netNs.NetID, nil
+			return *netNs.NetID, nil
 		}
 	}
 	return netID, fmt.Errorf("Net ID not found for project: %s", name)
@@ -173,9 +173,9 @@ func (p *ProjectOptions) CreateOrUpdateNetNamespace(name string, id uint) error 
 		// Create netns
 		netns := newNetNamespace(name, id)
 		_, err = p.Oclient.NetNamespaces().Create(netns)
-	} else if netns.NetID != id {
+	} else if *netns.NetID != id {
 		// Update netns
-		netns.NetID = id
+		netns.NetID = &id
 		_, err = p.Oclient.NetNamespaces().Update(netns)
 	}
 	return err
@@ -186,6 +186,6 @@ func newNetNamespace(name string, id uint) *sdnapi.NetNamespace {
 		TypeMeta:   unversioned.TypeMeta{Kind: "NetNamespace"},
 		ObjectMeta: kapi.ObjectMeta{Name: name},
 		NetName:    name,
-		NetID:      id,
+		NetID:      &id,
 	}
 }
