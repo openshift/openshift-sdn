@@ -92,7 +92,7 @@ func (j *JoinOptions) Run() error {
 	for _, project := range projects {
 		err = j.Options.CreateOrUpdateNetNamespace(project.ObjectMeta.Name, netID)
 		if err != nil {
-			errList = append(errList, fmt.Errorf("Project '%s' failed to join '%s', error: %v", project.ObjectMeta.Name, j.joinProjectName, err))
+			errList = append(errList, fmt.Errorf("Project %q failed to join %q, error: %v", project.ObjectMeta.Name, j.joinProjectName, err))
 		}
 	}
 	return kerrors.NewAggregate(errList)

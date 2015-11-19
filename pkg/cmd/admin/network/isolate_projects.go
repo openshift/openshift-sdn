@@ -10,6 +10,7 @@ import (
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	"github.com/openshift/origin/pkg/sdn/registry/netnamespace/vnid"
 )
 
 const (
@@ -67,11 +68,30 @@ func (i *IsolateOptions) Run() error {
 		return err
 	}
 
+	netnsList, err := i.Options.GetNetNamespaces()
+	if err != nil {
+		return err
+	}
+	netIDNamespaceMap := make(map[string]uint, len(netnsList.Items))
+	netIDCountMap := make(map[uint]uint, len(netnsList.Items))
+	for _, netns := range netnsList.Items {
+		netIDNamespaceMap[netns.ObjectMeta.Name] = *netns.NetID
+		netIDCountMap[*netns.NetID] += 1
+	}
+
 	errList := []error{}
 	for _, project := range projects {
-		// TBD: Create or Update network namespace
-		// TODO: Fix this once we move VNID allocation to REST layer
-		errList = append(errList, fmt.Errorf("Project '%s' can not be isolated. Isolate project network feature yet to be implemented!", project.ObjectMeta.Name))
+		netID, exists := netIDNamespaceMap[project.ObjectMeta.Name]
+		// Create new NetID in these cases
+		// - NetNamespace doesn't exist
+		// - Sharing network with other projects
+		// - Global network namespace
+		if !exists || (netIDCountMap[netID] > 1) || (netID == vnid.GlobalVNID) {
+			err = i.Options.CreateNewNetID(project.ObjectMeta.Name)
+			if err != nil {
+				errList = append(errList, fmt.Errorf("Project %q can not be isolated, error: %v", project.ObjectMeta.Name, err))
+			}
+		}
 	}
 	return kerrors.NewAggregate(errList)
 }
