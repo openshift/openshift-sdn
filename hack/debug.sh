@@ -105,7 +105,7 @@ do_master () {
     echo_and_eval  oc get routes    --all-namespaces -o yaml               &> $logmaster/aos_routes
     echo_and_eval  oc get clusternetwork             -o yaml               &> $logmaster/clusternetwork
     echo_and_eval  oc get hostsubnets                -o yaml               &> $logmaster/hostsubnets
-    echo_and_eval  oc get netnamespaces              -o yaml               &> $logmaster/netnamespaces
+    echo_and_eval  oc get namespaces                 -o yaml               &> $logmaster/namespaces
 
     for node in $nodes; do
 	reg_ip=$(oc get node $node --template '{{range .status.addresses}}{{if eq .type "InternalIP"}}{{.address}}{{end}}{{end}}')

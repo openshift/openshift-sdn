@@ -45,8 +45,6 @@ type OsdnController struct {
 	podNetworkReady    chan struct{}
 	vnidMap            map[string]uint
 	vnidLock           sync.Mutex
-	netIDManager       *netutils.NetIDAllocator
-	adminNamespaces    []string
 	iptablesSyncPeriod time.Duration
 }
 
@@ -84,7 +82,6 @@ func (oc *OsdnController) BaseInit(registry *Registry, pluginHooks PluginHooks, 
 	oc.HostName = hostname
 	oc.vnidMap = make(map[string]uint)
 	oc.podNetworkReady = make(chan struct{})
-	oc.adminNamespaces = make([]string, 0)
 	oc.iptablesSyncPeriod = iptablesSyncPeriod
 
 	return nil
