@@ -383,12 +383,11 @@ func (registry *Registry) GetNetNamespace(name string) (osdnapi.NetNamespace, er
 	return osdnapi.NetNamespace{Name: netns.Name, NetID: netns.NetID}, nil
 }
 
-func (registry *Registry) WriteNetNamespace(name string, id uint) error {
+func (registry *Registry) CreateNetNamespace(name string) error {
 	netns := &originapi.NetNamespace{
 		TypeMeta:   unversioned.TypeMeta{Kind: "NetNamespace"},
 		ObjectMeta: kapi.ObjectMeta{Name: name},
 		NetName:    name,
-		NetID:      id,
 	}
 	_, err := registry.oClient.NetNamespaces().Create(netns)
 	return err

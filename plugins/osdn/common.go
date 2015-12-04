@@ -35,8 +35,6 @@ type OvsController struct {
 	podNetworkReady chan struct{}
 	flowController  FlowController
 	VNIDMap         map[string]uint
-	netIDManager    *netutils.NetIDAllocator
-	adminNamespaces []string
 	services        map[string]api.Service
 }
 
@@ -77,7 +75,6 @@ func (oc *OvsController) BaseInit(registry *Registry, flowController FlowControl
 	oc.VNIDMap = make(map[string]uint)
 	oc.sig = make(chan struct{})
 	oc.podNetworkReady = make(chan struct{})
-	oc.adminNamespaces = make([]string, 0)
 	oc.services = make(map[string]api.Service)
 
 	return nil
