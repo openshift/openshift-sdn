@@ -3,6 +3,7 @@ package netutils
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/golang/glog"
 	"net"
 
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
@@ -70,6 +71,9 @@ func GetNodeIP(nodeName string) (string, error) {
 			if addr.String() != "127.0.0.1" {
 				ip = addr
 				break
+			} else {
+				glog.Warningf("Got IP address 127.0.0.1 from %s, it wouldn't used for Node IP", nodeName)
+				continue
 			}
 		}
 	}
