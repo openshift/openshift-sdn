@@ -32,6 +32,10 @@ function docker_network_config() {
 	    if ! grep -q -s "DOCKER_NETWORK_OPTIONS='${DOCKER_NETWORK_OPTIONS}'" $conf; then
 		return 1
 	    fi
+	    ip=$(echo `ip a s lbr0 2>/dev/null|awk '/inet / {print $2}'`)
+	    if [ "$ip" != "${local_subnet_gateway}/${local_subnet_mask_len}" ]; then
+	        return 1
+	    fi
 	    return 0
 	    ;;
 
@@ -48,6 +52,9 @@ EOF
 		brctl addbr lbr0
 		ip addr add ${local_subnet_gateway}/${local_subnet_mask_len} dev lbr0
 		ip link set lbr0 up
+
+		# delete unnecessary routes
+		delete_local_subnet_route lbr0 || true
 
 	    if [ ! -f /.dockerinit ]; then
 		# disable iptables for lbr0
@@ -69,10 +76,6 @@ EOF
 }
 
 function setup_required() {
-    ip=$(echo `ip a s lbr0 2>/dev/null|awk '/inet / {print $2}'`)
-    if [ "$ip" != "${local_subnet_gateway}/${local_subnet_mask_len}" ]; then
-        return 0
-    fi
     if [ "$multitenant" = "true" ]; then
 	flow_rule='NXM_NX_TUN_IPV4'
     else
@@ -196,7 +199,6 @@ function setup() {
     echo "export OPENSHIFT_CLUSTER_SUBNET=${cluster_network_cidr}" >> "/etc/openshift-sdn/config.env"
 
     # delete unnecessary routes
-    delete_local_subnet_route lbr0 || true
     delete_local_subnet_route ${TUN} || true
 }
 
