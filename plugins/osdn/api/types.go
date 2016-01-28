@@ -86,6 +86,8 @@ type OsdnPlugin interface {
 
 	StartMaster(clusterNetworkCIDR string, clusterBitsPerSubnet uint, serviceNetworkCIDR string) error
 	StartNode(mtu uint) error
+
+	NodeInitialized()
 }
 
 type FilteringEndpointsConfigHandler interface {
