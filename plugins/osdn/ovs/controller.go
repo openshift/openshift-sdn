@@ -6,7 +6,6 @@ import (
 	"github.com/golang/glog"
 	"io/ioutil"
 	"net"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -265,17 +264,6 @@ func (c *FlowController) Setup(localSubnetCIDR, clusterNetworkCIDR, servicesNetw
 	itx.DeleteLink()
 	itx.IgnoreError()
 	_ = itx.EndTransaction()
-
-	// Disable iptables for linux bridges (and in particular lbr0), ignoring errors.
-	// (This has to have been performed in advance for docker-in-docker deployments,
-	// since this will fail there).
-	_, _ = exec.Command("modprobe", "br_netfilter").CombinedOutput()
-	err = sysctl.SetSysctl("net/bridge/bridge-nf-call-iptables", 0)
-	if err != nil {
-		glog.Warningf("Could not set net.bridge.bridge-nf-call-iptables sysctl: %s", err)
-	} else {
-		glog.V(5).Infof("[SDN setup] set net.bridge.bridge-nf-call-iptables to 0")
-	}
 
 	// Enable IP forwarding for ipv4 packets
 	err = sysctl.SetSysctl("net/ipv4/ip_forward", 1)

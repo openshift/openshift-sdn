@@ -17,6 +17,7 @@ import (
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	kexec "k8s.io/kubernetes/pkg/util/exec"
 	"k8s.io/kubernetes/pkg/util/iptables"
+	"k8s.io/kubernetes/pkg/util/sysctl"
 )
 
 type PluginHooks interface {
@@ -224,6 +225,19 @@ func (oc *OvsController) StartNode(mtu uint) error {
 	oc.markPodNetworkReady()
 
 	return nil
+}
+
+func (oc *OvsController) NodeInitialized() {
+	// Disable iptables for linux bridges (and in particular lbr0), ignoring errors.
+	// (This has to have been performed in advance for docker-in-docker deployments,
+	// since this will fail there).
+	_, _ = kexec.New().Command("modprobe", "br_netfilter").CombinedOutput()
+	err := sysctl.SetSysctl("net/bridge/bridge-nf-call-iptables", 0)
+	if err != nil {
+		log.Warningf("Could not set net.bridge.bridge-nf-call-iptables sysctl: %s", err)
+	} else {
+		log.V(5).Infof("[SDN setup] set net.bridge.bridge-nf-call-iptables to 0")
+	}
 }
 
 func (oc *OvsController) markPodNetworkReady() {
