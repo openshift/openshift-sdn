@@ -5,37 +5,12 @@ import (
 
 	log "github.com/golang/glog"
 
-	"github.com/openshift/openshift-sdn/pkg/netutils"
 	"github.com/openshift/openshift-sdn/plugins/osdn/api"
+	"github.com/openshift/origin/pkg/sdn/registry/netnamespace/vnid"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
 )
 
-const (
-	// Maximum VXLAN Network Identifier as per RFC#7348
-	MaxVNID = ((1 << 24) - 1)
-	// VNID for the admin namespaces
-	AdminVNID = uint(0)
-)
-
 func (oc *OvsController) VnidStartMaster() error {
-	nets, _, err := oc.Registry.GetNetNamespaces()
-	if err != nil {
-		return err
-	}
-	inUse := make([]uint, 0)
-	for _, net := range nets {
-		if net.NetID != AdminVNID {
-			inUse = append(inUse, net.NetID)
-		}
-		oc.VNIDMap[net.Name] = net.NetID
-	}
-	// VNID: 0 reserved for default namespace and can reach any network in the cluster
-	// VNID: 1 to 9 are internally reserved for any special cases in the future
-	oc.netIDManager, err = netutils.NewNetIDAllocator(10, MaxVNID, inUse)
-	if err != nil {
-		return err
-	}
-
 	getNamespaces := func(registry *Registry) (interface{}, string, error) {
 		return registry.GetNamespaces()
 	}
@@ -43,101 +18,24 @@ func (oc *OvsController) VnidStartMaster() error {
 	if err != nil {
 		return err
 	}
-
-	// 'default' namespace is currently always an admin namespace
-	oc.adminNamespaces = append(oc.adminNamespaces, "default")
-
-	// Handle existing namespaces
 	namespaces := result.([]string)
+
+	// Handle existing namespaces without corresponding netnamespaces
+	netnsList, _, err := oc.Registry.GetNetNamespaces()
+	if err != nil {
+		return err
+	}
+	netNamespaceMap := make(map[string]bool, len(netnsList))
+	for _, netns := range netnsList {
+		netNamespaceMap[netns.Name] = true
+	}
+
 	for _, nsName := range namespaces {
-		// Revoke invalid VNID for admin namespaces
-		if oc.isAdminNamespace(nsName) {
-			netid, ok := oc.VNIDMap[nsName]
-			if ok && (netid != AdminVNID) {
-				err := oc.revokeVNID(nsName)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		_, found := oc.VNIDMap[nsName]
-		// Assign VNID for the namespace if it doesn't exist
-		if !found {
-			err := oc.assignVNID(nsName)
+		if !netNamespaceMap[nsName] {
+			err = oc.Registry.CreateNetNamespace(nsName)
 			if err != nil {
 				return err
 			}
-		}
-	}
-
-	return nil
-}
-
-func (oc *OvsController) isAdminNamespace(nsName string) bool {
-	for _, name := range oc.adminNamespaces {
-		if name == nsName {
-			return true
-		}
-	}
-	return false
-}
-
-func (oc *OvsController) assignVNID(namespaceName string) error {
-	_, err := oc.Registry.GetNetNamespace(namespaceName)
-	if err == nil {
-		return nil
-	}
-	var netid uint
-	if oc.isAdminNamespace(namespaceName) {
-		netid = AdminVNID
-	} else {
-		var err error
-		netid, err = oc.netIDManager.GetNetID()
-		if err != nil {
-			return err
-		}
-	}
-	err = oc.Registry.WriteNetNamespace(namespaceName, netid)
-	if err != nil {
-		e := oc.netIDManager.ReleaseNetID(netid)
-		if e != nil {
-			log.Errorf("Error while releasing Net ID: %v", e)
-		}
-		return err
-	}
-	oc.VNIDMap[namespaceName] = netid
-	return nil
-}
-
-func (oc *OvsController) revokeVNID(namespaceName string) error {
-	err := oc.Registry.DeleteNetNamespace(namespaceName)
-	if err != nil {
-		return err
-	}
-	netid, found := oc.VNIDMap[namespaceName]
-	if !found {
-		return fmt.Errorf("Error while fetching Net ID for namespace: %s", namespaceName)
-	}
-	delete(oc.VNIDMap, namespaceName)
-
-	// Skip AdminVNID as it is not part of Net ID allocation
-	if netid == AdminVNID {
-		return nil
-	}
-
-	// Check if this netid is used by any other namespaces
-	// If not, then release the netid
-	netid_inuse := false
-	for _, id := range oc.VNIDMap {
-		if id == netid {
-			netid_inuse = true
-			break
-		}
-	}
-	if !netid_inuse {
-		err = oc.netIDManager.ReleaseNetID(netid)
-		if err != nil {
-			return fmt.Errorf("Error while releasing Net ID: %v", err)
 		}
 	}
 	return nil
@@ -152,15 +50,15 @@ func watchNamespaces(oc *OvsController, ready chan<- bool, start <-chan string) 
 		case ev := <-nsevent:
 			switch ev.Type {
 			case api.Added:
-				err := oc.assignVNID(ev.Name)
+				err := oc.Registry.CreateNetNamespace(ev.Name)
 				if err != nil {
-					log.Errorf("Error assigning Net ID: %v", err)
+					log.Errorf("Error creating NetNamespace: %v", err)
 					continue
 				}
 			case api.Deleted:
-				err := oc.revokeVNID(ev.Name)
+				err := oc.Registry.DeleteNetNamespace(ev.Name)
 				if err != nil {
-					log.Errorf("Error revoking Net ID: %v", err)
+					log.Errorf("Error deleting NetNamespace: %v", err)
 					continue
 				}
 			}
@@ -266,7 +164,7 @@ func watchNetNamespaces(oc *OvsController, ready chan<- bool, start <-chan strin
 					log.Errorf("Failed to update pod network for namespace '%s', error: %s", ev.Name, err)
 				}
 			case api.Deleted:
-				err := oc.updatePodNetwork(ev.Name, AdminVNID, oldNetID)
+				err := oc.updatePodNetwork(ev.Name, vnid.GlobalVNID, oldNetID)
 				if err != nil {
 					log.Errorf("Failed to update pod network for namespace '%s', error: %s", ev.Name, err)
 				}

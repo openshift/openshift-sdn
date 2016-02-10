@@ -10,6 +10,7 @@ import (
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
+	"github.com/openshift/origin/pkg/sdn/registry/netnamespace/vnid"
 )
 
 const (
@@ -73,7 +74,7 @@ func (m *MakeGlobalOptions) Run() error {
 	for _, project := range projects {
 		err = m.Options.CreateOrUpdateNetNamespace(project.ObjectMeta.Name, globalVNID)
 		if err != nil {
-			errList = append(errList, fmt.Errorf("Removing network isolation for project '%s' failed, error: %v", project.ObjectMeta.Name, err))
+			errList = append(errList, fmt.Errorf("Removing network isolation for project %q failed, error: %v", project.ObjectMeta.Name, err))
 		}
 	}
 	return kerrors.NewAggregate(errList)

@@ -345,7 +345,7 @@ func (registry *Registry) WatchNetNamespaces(receiver chan<- *osdnapi.NetNamespa
 
 		switch eventType {
 		case watch.Added, watch.Modified:
-			receiver <- &osdnapi.NetNamespaceEvent{Type: osdnapi.Added, Name: netns.NetName, NetID: netns.NetID}
+			receiver <- &osdnapi.NetNamespaceEvent{Type: osdnapi.Added, Name: netns.NetName, NetID: *netns.NetID}
 		case watch.Deleted:
 			receiver <- &osdnapi.NetNamespaceEvent{Type: osdnapi.Deleted, Name: netns.NetName}
 		}
@@ -360,7 +360,7 @@ func (registry *Registry) GetNetNamespaces() ([]osdnapi.NetNamespace, string, er
 	// convert originapi.NetNamespace to osdnapi.NetNamespace
 	nsList := make([]osdnapi.NetNamespace, 0, len(netNamespaceList.Items))
 	for _, netns := range netNamespaceList.Items {
-		nsList = append(nsList, osdnapi.NetNamespace{Name: netns.Name, NetID: netns.NetID})
+		nsList = append(nsList, osdnapi.NetNamespace{Name: netns.Name, NetID: *netns.NetID})
 	}
 	return nsList, netNamespaceList.ListMeta.ResourceVersion, nil
 }
@@ -370,15 +370,14 @@ func (registry *Registry) GetNetNamespace(name string) (osdnapi.NetNamespace, er
 	if err != nil {
 		return osdnapi.NetNamespace{}, err
 	}
-	return osdnapi.NetNamespace{Name: netns.Name, NetID: netns.NetID}, nil
+	return osdnapi.NetNamespace{Name: netns.Name, NetID: *netns.NetID}, nil
 }
 
-func (registry *Registry) WriteNetNamespace(name string, id uint) error {
+func (registry *Registry) CreateNetNamespace(name string) error {
 	netns := &originapi.NetNamespace{
 		TypeMeta:   unversioned.TypeMeta{Kind: "NetNamespace"},
 		ObjectMeta: kapi.ObjectMeta{Name: name},
 		NetName:    name,
-		NetID:      id,
 	}
 	_, err := registry.oClient.NetNamespaces().Create(netns)
 	return err

@@ -23,3 +23,10 @@ func NewPlugin(pluginType string, osClient *osclient.Client, kClient *kclient.Cl
 
 	return nil, nil, nil
 }
+
+func IsMultitenantNetworkPlugin(pluginType string) bool {
+	if strings.ToLower(pluginType) == ovs.MultiTenantPluginName() {
+		return true
+	}
+	return false
+}
