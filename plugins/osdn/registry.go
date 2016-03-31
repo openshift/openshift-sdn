@@ -52,6 +52,10 @@ func NewRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
 	}
 }
 
+func (registry *Registry) GetSDNClients() (osclient.Interface, kclient.Interface) {
+	return registry.oClient, registry.kClient
+}
+
 func (registry *Registry) GetSubnets() ([]osapi.HostSubnet, error) {
 	hostSubnetList, err := registry.oClient.HostSubnets().List(kapi.ListOptions{})
 	if err != nil {

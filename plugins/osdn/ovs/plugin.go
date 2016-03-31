@@ -66,6 +66,12 @@ func (plugin *ovsPlugin) PluginStartMaster(clusterNetwork *net.IPNet, hostSubnet
 	if err := plugin.SubnetStartMaster(clusterNetwork, hostSubnetLength); err != nil {
 		return err
 	}
+
+	if plugin.multitenant {
+		if err := plugin.VnidStartMaster(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
