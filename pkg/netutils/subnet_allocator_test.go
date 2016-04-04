@@ -3,6 +3,7 @@ package netutils
 import (
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 )
 
@@ -228,5 +229,49 @@ func TestGenerateGateway(t *testing.T) {
 	gatewayIP := GenerateDefaultGateway(sn)
 	if gatewayIP.String() != "10.1.0.1" {
 		t.Fatalf("Did not get expected gateway IP Address (gatewayIP=%s)", gatewayIP.String())
+	}
+}
+
+func TestAllocateConcurrentSubnets(t *testing.T) {
+	sna, err := NewSubnetAllocator("10.1.0.0/16", 8, nil)
+	if err != nil {
+		t.Fatal("Failed to initialize subnet allocator: ", err)
+	}
+
+	networks := make(map[string]string)
+	errors := make([]error, 0)
+
+	const NUM_SUBNETS = 200
+
+	start := sync.WaitGroup{}
+	start.Add(NUM_SUBNETS)
+	end := sync.WaitGroup{}
+	end.Add(NUM_SUBNETS)
+	var mux sync.Mutex
+	for i := 0; i < NUM_SUBNETS; i++ {
+		go func() {
+			// Wait until children all are ready
+			start.Done()
+			start.Wait()
+
+			sn, err := sna.GetNetwork()
+			if err != nil {
+				errors = append(errors, fmt.Errorf("Failed to get network: %v", err))
+			} else {
+				mux.Lock()
+				defer mux.Unlock()
+				if _, ok := networks[sn.String()]; ok {
+					errors = append(errors, fmt.Errorf("Duplicate subnet allocated: %s", sn.String()))
+				} else {
+					networks[sn.String()] = sn.String()
+				}
+			}
+			end.Done()
+		}()
+	}
+	end.Wait()
+
+	if len(errors) > 0 {
+		t.Fatalf("Error ensuring single allocations: %v", errors)
 	}
 }
