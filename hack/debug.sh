@@ -52,6 +52,7 @@ log_system () {
     echo_and_eval  cat /etc/resolv.conf                               &> $logpath/resolv.conf
     echo_and_eval  lsmod                                              &> $logpath/modules
     echo_and_eval  sysctl -a                                          &> $logpath/sysctl
+    echo_and_eval  cat "$config"                                      &> $logpath/master-config.yaml
 
     echo_and_eval  oc version                                         &> $logpath/version
     echo                                                             &>> $logpath/version
@@ -61,14 +62,25 @@ log_system () {
 }
 
 do_master () {
-    if ! nodes=$(oc get nodes --template '{{range .items}}{{.spec.externalID}} {{end}}'); then
-	if [ -z "$KUBECONFIG" -o ! -f "$KUBECONFIG" ]; then
-	    die "KUBECONFIG is unset or incorrect"
-	else
-	    die "Could not get list of nodes"
-	fi
+    # Find the config file
+    config=$(ps wwaux | grep -v grep | sed -ne 's/.*openshift.*--\(master-\)\?config=\([^ ]*\.yaml\).*/\2/p')
+    if [ -z "$config" ]; then
+      config=$(systemctl show -p ExecStart $aos_master_service | sed -ne 's/.*--\(master-\)\?config=\([^ ]*\).*/\1/p')
+    fi
+    if [ -z "$config" ]; then
+      die "Could not find master-config.yaml from 'ps' or 'systemctl show'"
     fi
 
+    # Pull all of the nodes from the system
+    if ! nodes=$(oc get nodes --template '{{range .items}}{{.spec.externalID}} {{end}}'); then
+      if [ -z "$KUBECONFIG" -o ! -f "$KUBECONFIG" ]; then
+	    die "KUBECONFIG is unset or incorrect"
+      else
+	    die "Could not get list of nodes"
+      fi
+    fi
+
+    # Set up a dir for all of our stuff
     logmaster=$logdir/master
     mkdir -p $logmaster
 
@@ -249,16 +261,19 @@ do_pod_service_connectivity_check () {
 }
 
 do_node () {
-    config=$(ps wwaux | grep -v grep | sed -ne 's/.*openshift.*--config=\([^ ]*\.yaml\).*/\1/p')
+    # Find the config file
+    config=$(ps wwaux | grep -v grep | sed -ne 's/.*openshift.*--\(node-\)\?config=\([^ ]*\.yaml\).*/\1/p')
     if [ -z "$config" ]; then
-	config=$(systemctl show -p ExecStart $aos_node_service | sed -ne 's/.*--config=\([^ ]*\).*/\1/p')
+      config=$(systemctl show -p ExecStart $aos_node_service | sed -ne 's/.*--\(node-\)\?config=\([^ ]*\).*/\1/p')
     fi
     if [ -z "$config" ]; then
-	die "Could not find node-config.yaml from 'ps' or 'systemctl show'"
+      die "Could not find node-config.yaml from 'ps' or 'systemctl show'"
     fi
+
+    # Set up a nodename specific log dir (after extracting the name from the conf)
     node=$(sed -ne 's/^nodeName: //p' $config)
     if [ -z "$node" ]; then
-	die "Could not find node name in $config"
+      die "Could not find node name in $config"
     fi
 
     lognode=$logdir/nodes/$node
@@ -273,6 +288,7 @@ do_node () {
     echo_and_eval  ovs-ofctl -O OpenFlow13 dump-flows br0  &> $lognode/flows
     echo_and_eval  ovs-ofctl -O OpenFlow13 show br0        &> $lognode/ovs-show
     echo_and_eval  systemctl cat docker.service            &> $lognode/docker-unit-file
+    echo_and_eval  cat "$config"                           &> $lognode/node-config.yaml
     echo_and_eval  cat `systemctl cat docker.service | grep EnvironmentFile.\*openshift-sdn | awk -F=- '{print $2}'` \
                                                            &> $lognode/docker-network-file
 
