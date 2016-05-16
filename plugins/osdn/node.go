@@ -30,6 +30,8 @@ type OsdnNode struct {
 	vnids              vnidMap
 	iptablesSyncPeriod time.Duration
 	mtu                uint
+	curFwTable         int
+	fwRules            []osapi.EgressFirewallRule
 }
 
 // Called by higher layers to create the plugin SDN node instance
@@ -70,6 +72,7 @@ func NewNodePlugin(pluginName string, osClient *osclient.Client, kClient *kclien
 		podNetworkReady:    make(chan struct{}),
 		iptablesSyncPeriod: iptablesSyncPeriod,
 		mtu:                mtu,
+		curFwTable:         -1,
 	}
 	return plugin, nil
 }
@@ -94,6 +97,10 @@ func (node *OsdnNode) Start() error {
 		if err := node.VnidStartNode(); err != nil {
 			return err
 		}
+	}
+
+	if err := node.SetupEgressFirewall(); err != nil {
+		return err
 	}
 
 	if networkChanged {

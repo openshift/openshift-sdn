@@ -16,7 +16,11 @@ import (
 	osapi "github.com/openshift/origin/pkg/sdn/api"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	kerrors "k8s.io/kubernetes/pkg/api/errors"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/sysctl"
+	utilwait "k8s.io/kubernetes/pkg/util/wait"
+	"k8s.io/kubernetes/pkg/watch"
 )
 
 const (
@@ -25,6 +29,7 @@ const (
 	VERSION_TABLE  = "table=253"
 	VERSION_ACTION = "actions=note:"
 
+	// OVS-related interfaces
 	BR       = "br0"
 	LBR      = "lbr0"
 	TUN      = "tun0"
@@ -33,6 +38,10 @@ const (
 	VXLAN    = "vxlan0"
 
 	VXLAN_PORT = "4789"
+
+	// Egress firewall tables
+	FW_TABLE_LOW  = 10
+	FW_TABLE_HIGH = 11
 )
 
 func getPluginVersion(multitenant bool) []string {
@@ -252,7 +261,7 @@ func (plugin *OsdnNode) SetupSDN(localSubnetCIDR, clusterNetworkCIDR, servicesNe
 	otx.AddFlow("table=5, priority=200, ip, nw_dst=%s, actions=goto_table:7", localSubnetCIDR)
 	otx.AddFlow("table=5, priority=100, arp, nw_dst=%s, actions=goto_table:8", clusterNetworkCIDR)
 	otx.AddFlow("table=5, priority=100, ip, nw_dst=%s, actions=goto_table:8", clusterNetworkCIDR)
-	otx.AddFlow("table=5, priority=0, ip, actions=output:2")
+	otx.AddFlow("table=5, priority=0, ip, actions=goto_table:9")
 	otx.AddFlow("table=5, priority=0, arp, actions=drop")
 
 	// Table 6: ARP to container, filled in by openshift-sdn-ovs
@@ -268,6 +277,20 @@ func (plugin *OsdnNode) SetupSDN(localSubnetCIDR, clusterNetworkCIDR, servicesNe
 	// eg, "table=8, priority=100, arp, nw_dst=${remote_subnet_cidr}, actions=move:NXM_NX_REG0[]->NXM_NX_TUN_ID[0..31], set_field:${remote_node_ip}->tun_dst,output:1"
 	// eg, "table=8, priority=100, ip, nw_dst=${remote_subnet_cidr}, actions=move:NXM_NX_REG0[]->NXM_NX_TUN_ID[0..31], set_field:${remote_node_ip}->tun_dst,output:1"
 	otx.AddFlow("table=8, priority=0, actions=drop")
+
+	// Table 9: egress firewall dispatch; edited by UpdateEgressFirewall()
+	// eg, "table=9, priority=0, actions=goto_table:10
+	otx.AddFlow("table=9, priority=0, actions=output:2")
+
+	// Table 10: egress firewall #1 (FW_TABLE_LOW); filled in by UpdateEgressFirewall()
+	// eg, "table=10, priority=10001, ip, reg0=${tenant_id}, nw_dst=${foreign_subnet_cidr}, actions=output:2"
+	// eg, "table=10, priority=10000, ip, nw_dst=${foreign_subnet_cidr}, actions=drop"
+	otx.AddFlow("table=10, priority=0, actions=output:2")
+
+	// Table 11: egress firewall #2 (FW_TABLE_HIGH); filled in by UpdateEgressFirewall()
+	// eg, "table=11, priority=10001, ip, reg0=${tenant_id}, nw_dst=${foreign_subnet_cidr}, actions=output:2"
+	// eg, "table=11, priority=10000, ip, nw_dst=${foreign_subnet_cidr}, actions=drop"
+	otx.AddFlow("table=11, priority=0, actions=output:2")
 
 	err = otx.EndTransaction()
 	if err != nil {
@@ -325,6 +348,139 @@ func (plugin *OsdnNode) SetupSDN(localSubnetCIDR, clusterNetworkCIDR, servicesNe
 	}
 
 	return true, nil
+}
+
+func (plugin *OsdnNode) SetupEgressFirewall() error {
+	plugin.curFwTable = -1
+	fw, err := plugin.registry.GetEgressFirewall()
+	if err == nil {
+		plugin.fwRules = fw.Rules
+	} else {
+		if kerrors.IsNotFound(err) {
+			plugin.fwRules = nil
+		} else {
+			return fmt.Errorf("Could not get EgressFirewall: %s", err)
+		}
+	}
+
+	err = plugin.UpdateEgressFirewall()
+	if err != nil {
+		return err
+	}
+	go utilwait.Forever(plugin.watchEgressFirewall, 0)
+	return nil
+}
+
+func (plugin *ovsPlugin) watchEgressFirewall() {
+	eventQueue := plugin.registry.RunEventQueue(osdn.EgressFirewalls)
+
+	for {
+		eventType, obj, err := eventQueue.Pop()
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("EventQueue failed for EgressFirewall: %v", err))
+			return
+		}
+		fw := obj.(*osapi.EgressFirewall)
+		if fw.Name != "default" {
+			glog.Warningf("Ignoring invalid EgressFirewall %q", fw.Name)
+		}
+
+		if eventType == watch.Added || eventType == watch.Modified {
+			if len(fw.Rules) > 10000 {
+				glog.Warningf("Too many EgressFirewall rules (%d). Ignoring", len(fw.Rules))
+			}
+			plugin.fwRules = fw.Rules
+		} else {
+			plugin.fwRules = nil
+		}
+		err = plugin.UpdateEgressFirewall()
+		if err != nil {
+			utilruntime.HandleError(err)
+			return
+		}
+	}
+}
+
+func (plugin *ovsPlugin) UpdateEgressFirewall() error {
+	var newFwTable int
+
+	otx := ovs.NewTransaction(BR)
+
+	if len(plugin.fwRules) == 0 {
+		// No rules: update table 9 to just accept traffic immediately
+		newFwTable = -1
+		otx.ModFlows("table=9, priority=0, actions=output:2")
+	} else {
+		// Figure out which of table 10 and 11 we should use, clean it out,
+		// fill in the rules, and then update table 9 to point to that table.
+		// This means that if anything fails, we continue using the old
+		// firewall rules, and if everything is OK, then we transition from
+		// the old rules to the new one atomically when we change the table 9
+		// rule.
+
+		if plugin.curFwTable == FW_TABLE_LOW {
+			newFwTable = FW_TABLE_HIGH
+		} else {
+			newFwTable = FW_TABLE_LOW
+		}
+		otx.DeleteFlows("table=%d", newFwTable)
+
+		for i, rule := range plugin.fwRules {
+			priority := len(plugin.fwRules) - i
+
+			var action string
+			if rule.Policy == osapi.EgressFirewallPolicyAllow {
+				action = "output:2"
+			} else {
+				action = "drop"
+			}
+
+			var src string
+			if rule.From == "" {
+				src = ""
+			} else {
+				if !plugin.multitenant {
+					glog.Errorf("Cannot implement namespaced EgressFirewallRule (%s from %q to %s) with single-tenant plugin", string(rule.Policy), rule.From, rule.To)
+					continue
+				}
+				vnid, err := plugin.getVNID(rule.From)
+				if err != nil {
+					glog.Warningf("Could not find namespace %q for EgressFirewallRule: %s from %q to %s: %s", rule.From, string(rule.Policy), rule.From, rule.To, err)
+					continue
+				}
+				src = fmt.Sprintf(", reg0=%s", vnid)
+			}
+
+			var dst string
+			if rule.To == "0.0.0.0/32" {
+				dst = ""
+			} else {
+				dst = fmt.Sprintf(", nw_dst=%s", rule.To)
+			}
+
+			otx.AddFlow("table=%d, priority=%d, ip%s%s, actions=%s", newFwTable, priority, src, dst, action)
+		}
+		otx.AddFlow("table=%d, priority=0, actions=output:2", newFwTable)
+
+		otx.ModFlows("table=9, priority=0, actions=goto_table:%d", newFwTable)
+	}
+
+	err := otx.EndTransaction()
+	if err != nil {
+		return fmt.Errorf("Error updating OVS flows for EgressFirewall: %v", err)
+	}
+
+	if plugin.curFwTable != -1 {
+		otx := ovs.NewTransaction(BR)
+		otx.DeleteFlows("table=%d", plugin.curFwTable)
+		err := otx.EndTransaction()
+		if err != nil {
+			glog.Warningf("Error cleaning up old OVS flows for EgressFirewall: %v", err)
+			// Not fatal since we'll try again before we actually use this table again
+		}
+	}
+	plugin.curFwTable = newFwTable
+	return nil
 }
 
 func (plugin *OsdnNode) AddHostSubnetRules(subnet *osapi.HostSubnet) error {

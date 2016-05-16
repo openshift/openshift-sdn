@@ -13,6 +13,7 @@ import (
 	osclient "github.com/openshift/origin/pkg/client"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	kerrors "k8s.io/kubernetes/pkg/api/errors"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	pconfig "k8s.io/kubernetes/pkg/proxy/config"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
@@ -24,6 +25,8 @@ type ovsProxyPlugin struct {
 	registry  *Registry
 	podsByIP  map[string]*kapi.Pod
 	podsMutex sync.Mutex
+	fwRules   []osapi.EgressFirewallRule
+	fwNets    []*net.IPNet
 
 	baseEndpointsHandler pconfig.EndpointsConfigHandler
 }
@@ -51,13 +54,66 @@ func (proxy *ovsProxyPlugin) Start(baseHandler pconfig.EndpointsConfigHandler) e
 		return err
 	}
 
+	fw, err := proxy.registry.GetEgressFirewall()
+	if err == nil {
+		proxy.setFwRules(fw.Rules)
+	} else {
+		if kerrors.IsNotFound(err) {
+			proxy.setFwRules(nil)
+		} else {
+			return fmt.Errorf("Could not get EgressFirewall: %s", err)
+		}
+	}
+
 	for _, pod := range pods {
 		proxy.trackPod(&pod)
 	}
 
 	go utilwait.Forever(proxy.watchPods, 0)
+	go utilwait.Forever(proxy.watchEgressFirewall, 0)
 
 	return nil
+}
+
+func (proxy *ovsProxyPlugin) watchEgressFirewall() {
+	eventQueue := plugin.registry.RunEventQueue(osdn.EgressFirewalls)
+
+	for {
+		eventType, obj, err := eventQueue.Pop()
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("EventQueue failed for EgressFirewall: %v", err))
+			return
+		}
+		fw := obj.(*osapi.EgressFirewall)
+		if fw.Name != "default" {
+			glog.Warningf("Ignoring invalid EgressFirewall %q", fw.Name)
+		}
+
+		if eventType == watch.Added || eventType == watch.Modified {
+			if len(fw.Rules) > 10000 {
+				glog.Warningf("Too many EgressFirewall rules (%d). Ignoring", len(fw.Rules))
+			}
+			proxy.setFwRules(fw.Rules)
+		} else {
+			proxy.setFwRules(nil)
+		}
+		// FIXME: poke the endpoint-syncer somehow...
+	}
+}
+
+func (proxy *ovsProxyPlugin) setFwRules(fwRules []osapi.EgressFirewallRule) {
+	nets := new([]*net.IPNet, len(fwRules))
+	for i := range fwRules {
+		_, cidr, err := net.ParseCIDR(fwRules[i].To)
+		if err != nil {
+			// should have been caught by validation
+			glog.Errorf("Illegal CIDR value %q in EgressFirewall rule", fwRules[i].To)
+			return
+		}
+		nets[i] = cidr
+	}
+	proxy.fwRules = fwRules
+	proxy.fwNets = nets
 }
 
 func (proxy *ovsProxyPlugin) watchPods() {
@@ -128,6 +184,18 @@ func (proxy *ovsProxyPlugin) unTrackPod(pod *kapi.Pod) {
 	}
 }
 
+func (proxy *ovsProxyPlugin) firewallBlocksIP(namespace string, ip *net.IP) {
+	for i, rule := range proxy.fwRules {
+		if rule.From != "" && rule.From != namespace {
+			continue
+		}
+		if proxy.fwNets[i].Contains(ip) {
+			return rule.Policy == osapi.EgressFirewallPolicyDeny
+		}
+	}
+	return false
+}
+
 func (proxy *ovsProxyPlugin) OnEndpointsUpdate(allEndpoints []kapi.Endpoints) {
 	ni, err := proxy.registry.GetNetworkInfo()
 	if err != nil {
@@ -146,8 +214,7 @@ EndpointLoop:
 				if ni.ServiceNetwork.Contains(IP) {
 					glog.Warningf("Service '%s' in namespace '%s' has an Endpoint inside the service network (%s)", ep.ObjectMeta.Name, ns, addr.IP)
 					continue EndpointLoop
-				}
-				if ni.ClusterNetwork.Contains(IP) {
+				} else if ni.ClusterNetwork.Contains(IP) {
 					podInfo, ok := proxy.getTrackedPod(addr.IP)
 					if !ok {
 						glog.Warningf("Service '%s' in namespace '%s' has an Endpoint pointing to non-existent pod (%s)", ep.ObjectMeta.Name, ns, addr.IP)
@@ -155,6 +222,11 @@ EndpointLoop:
 					}
 					if podInfo.ObjectMeta.Namespace != ns {
 						glog.Warningf("Service '%s' in namespace '%s' has an Endpoint pointing to pod %s in namespace '%s'", ep.ObjectMeta.Name, ns, addr.IP, podInfo.ObjectMeta.Namespace)
+						continue EndpointLoop
+					}
+				} else {
+					if proxy.firewallBlocksIP(ns, IP) {
+						glog.Warningf("Service '%s' in namespace '%s' has an Endpoint pointing to firewalled destination (%s)", ep.ObjectMeta.Name, ns, addr.IP)
 						continue EndpointLoop
 					}
 				}

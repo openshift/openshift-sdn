@@ -38,12 +38,13 @@ type Registry struct {
 type ResourceName string
 
 const (
-	Nodes         ResourceName = "Nodes"
-	Namespaces    ResourceName = "Namespaces"
-	NetNamespaces ResourceName = "NetNamespaces"
-	Services      ResourceName = "Services"
-	HostSubnets   ResourceName = "HostSubnets"
-	Pods          ResourceName = "Pods"
+	Nodes           ResourceName = "Nodes"
+	Namespaces      ResourceName = "Namespaces"
+	NetNamespaces   ResourceName = "NetNamespaces"
+	Services        ResourceName = "Services"
+	HostSubnets     ResourceName = "HostSubnets"
+	Pods            ResourceName = "Pods"
+	EgressFirewalls ResourceName = "EgressFirewalls"
 )
 
 func newRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
@@ -259,6 +260,10 @@ func (registry *Registry) getServices(namespace string) ([]kapi.Service, error) 
 	return servList, nil
 }
 
+func (registry *Registry) GetEgressFirewall() (*osapi.EgressFirewall, error) {
+	return registry.oClient.EgressFirewall().Get("default")
+}
+
 // Run event queue for the given resource
 func (registry *Registry) RunEventQueue(resourceName ResourceName) *oscache.EventQueue {
 	var client cache.Getter
@@ -283,6 +288,9 @@ func (registry *Registry) RunEventQueue(resourceName ResourceName) *oscache.Even
 	case Pods:
 		expectedType = &kapi.Pod{}
 		client = registry.kClient
+	case EgressFirewalls:
+		expectedType = &osapi.EgressFirewall{}
+		client = registry.oClient
 	default:
 		log.Fatalf("Unknown resource %s during initialization of event queue", resourceName)
 	}
