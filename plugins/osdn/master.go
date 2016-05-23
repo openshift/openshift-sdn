@@ -69,7 +69,7 @@ func StartMaster(networkConfig osconfigapi.MasterNetworkConfig, osClient *osclie
 }
 
 func (master *OsdnMaster) validateNetworkConfig(ni *NetworkInfo) error {
-	hostIPNets, err := netutils.GetHostIPNetworks([]string{TUN, LBR})
+	hostIPNets, err := netutils.GetHostIPNetworks([]string{TUN})
 	if err != nil {
 		return err
 	}

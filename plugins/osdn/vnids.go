@@ -283,7 +283,7 @@ func (node *OsdnNode) updatePodNetwork(namespace string, netID uint) error {
 		return err
 	}
 	for _, pod := range pods {
-		err := node.UpdatePod(pod.Namespace, pod.Name, kubetypes.DockerID(getPodContainerID(&pod)))
+		err := node.UpdatePod(pod.Namespace, pod.Name, kubetypes.ContainerID{ID: getPodContainerID(&pod)})
 		if err != nil {
 			return err
 		}
