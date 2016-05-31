@@ -88,6 +88,14 @@ func (tx *Transaction) AddFlow(flow string, args ...interface{}) {
 	tx.ofctlExec("add-flow", tx.bridge, flow)
 }
 
+// ModFlows modifies all matching flows on the bridge. The arguments are passed to fmt.Sprintf().
+func (tx *Transaction) ModFlows(flow string, args ...interface{}) {
+	if len(args) > 0 {
+		flow = fmt.Sprintf(flow, args...)
+	}
+	tx.ofctlExec("mod-flows", tx.bridge, flow)
+}
+
 // DeleteFlows deletes all matching flows from the bridge. The arguments are
 // passed to fmt.Sprintf().
 func (tx *Transaction) DeleteFlows(flow string, args ...interface{}) {
