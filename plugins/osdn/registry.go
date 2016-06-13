@@ -52,7 +52,7 @@ func NewRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
 	}
 }
 
-func (registry *Registry) GetSDNClients() (osclient.Interface, kclient.Interface) {
+func (registry *Registry) GetSDNClients() (*osclient.Client, *kclient.Client) {
 	return registry.oClient, registry.kClient
 }
 

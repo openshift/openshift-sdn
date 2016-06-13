@@ -8,6 +8,8 @@ import (
 	log "github.com/golang/glog"
 
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/cache"
+	"k8s.io/kubernetes/pkg/fields"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/registry/service/allocator"
 	etcdallocator "k8s.io/kubernetes/pkg/registry/service/allocator/etcd"
@@ -21,6 +23,8 @@ import (
 	vnidcontroller "github.com/openshift/openshift-sdn/plugins/osdn/netid/controller"
 	"github.com/openshift/openshift-sdn/plugins/osdn/netid/vnid"
 	"github.com/openshift/openshift-sdn/plugins/osdn/netid/vnidallocator"
+	oscache "github.com/openshift/origin/pkg/client/cache"
+	"github.com/openshift/origin/pkg/sdn/api"
 	"github.com/openshift/origin/pkg/sdn/registry/netnamespace"
 )
 
@@ -140,6 +144,10 @@ func (oc *OsdnController) VnidStartNode() error {
 
 	go utilwait.Forever(oc.watchNamespaces, 0)
 	go utilwait.Forever(oc.watchServices, 0)
+
+	// Support migration: When nodes are upgraded, this will ensure we don't miss
+	// any NetNamespace events until master is upgraded.
+	go oc.watchNetNamespaces()
 	return nil
 }
 
@@ -278,6 +286,72 @@ func (oc *OsdnController) watchServices() {
 			if err := oc.pluginHooks.DeleteServiceRules(serv); err != nil {
 				log.Error(err)
 			}
+		}
+	}
+}
+
+// Only needed for backward compatibility during migration
+func (oc *OsdnController) watchNetNamespaces() {
+	osClient, _ := oc.Registry.GetSDNClients()
+	lw := cache.NewListWatchFromClient(osClient, "netnamespaces", kapi.NamespaceAll, fields.Everything())
+	eventQueue := oscache.NewEventQueue(cache.MetaNamespaceKeyFunc)
+	resyncPeriod := 30 * time.Minute
+	reflector := cache.NewReflector(lw, &api.NetNamespace{}, eventQueue, resyncPeriod)
+	stopCh := make(chan struct{})
+
+	go utilwait.Until(func() {
+		if _, err := osClient.NetNamespaces().Watch(kapi.ListOptions{}); err != nil {
+			log.Errorf("failed to watch NetNamespaces. This could also mean master is upgraded and we no longer need to watch this resource.")
+			close(stopCh)
+			return
+		}
+
+		if err := reflector.ListAndWatch(stopCh); err != nil {
+			log.Error(err)
+			close(stopCh)
+			return
+		}
+	}, resyncPeriod, stopCh)
+
+	for {
+		eventType, obj, err := eventQueue.Pop()
+		if err != nil {
+			log.Errorf("EventQueue failed for network namespaces: %v", err)
+			return
+		}
+		netns := obj.(*api.NetNamespace)
+		if netnamespace.IsNetNamespaceMigrated(netns) {
+			// Master is upgraded, we don't need to watch NetNamespace any more.
+			log.Infof("master is upgraded, stopping watch NetNamespaces.")
+			close(stopCh)
+			return
+		}
+		name := netns.NetName
+		netID := netns.NetID
+
+		log.V(5).Infof("Watch %s event for NetNamespace %q", strings.Title(string(eventType)), name)
+		switch eventType {
+		case watch.Added, watch.Modified:
+			// Skip this event if the old and new network ids are same
+			oldNetID, err := oc.GetVNID(name)
+			if (err == nil) && (oldNetID == netID) {
+				continue
+			}
+			oc.setVNID(name, netID)
+
+			err = oc.updatePodNetwork(name, netID)
+			if err != nil {
+				log.Errorf("Failed to update pod network for namespace '%s', error: %v", name, err)
+				oc.setVNID(name, oldNetID)
+				continue
+			}
+		case watch.Deleted:
+			// updatePodNetwork needs netid, so unset netid after this call
+			err := oc.updatePodNetwork(name, netid.GlobalVNID)
+			if err != nil {
+				log.Errorf("Failed to update pod network for namespace '%s', error: %v", name, err)
+			}
+			oc.unSetVNID(name)
 		}
 	}
 }
