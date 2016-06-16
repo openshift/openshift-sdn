@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kapi "k8s.io/kubernetes/pkg/api"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
@@ -62,16 +63,15 @@ func NewCmdIsolateProjectsNetwork(commandName, fullName string, f *clientcmd.Fac
 }
 
 func (i *IsolateOptions) Run() error {
-	projects, err := i.Options.GetProjects()
+	namespacesInfo, err := i.Options.GetNamespacesInfo()
 	if err != nil {
 		return err
 	}
 
 	errList := []error{}
-	for _, project := range projects {
-		// TBD: Create or Update network namespace
-		// TODO: Fix this once we move VNID allocation to REST layer
-		errList = append(errList, fmt.Errorf("Project '%s' can not be isolated. Isolate project network feature yet to be implemented!", project.ObjectMeta.Name))
+	for _, info := range namespacesInfo {
+		ns, _ := info.Object.(*kapi.Namespace)
+		errList = append(errList, fmt.Errorf("Project '%s' can not be isolated. Isolate project network feature yet to be implemented!", ns.ObjectMeta.Name))
 	}
 	return kerrors.NewAggregate(errList)
 }

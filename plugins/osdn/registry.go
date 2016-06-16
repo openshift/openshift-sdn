@@ -38,12 +38,11 @@ type Registry struct {
 type ResourceName string
 
 const (
-	Nodes         ResourceName = "Nodes"
-	Namespaces    ResourceName = "Namespaces"
-	NetNamespaces ResourceName = "NetNamespaces"
-	Services      ResourceName = "Services"
-	HostSubnets   ResourceName = "HostSubnets"
-	Pods          ResourceName = "Pods"
+	Nodes       ResourceName = "Nodes"
+	Namespaces  ResourceName = "Namespaces"
+	Services    ResourceName = "Services"
+	HostSubnets ResourceName = "HostSubnets"
+	Pods        ResourceName = "Pods"
 )
 
 func NewRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
@@ -51,6 +50,10 @@ func NewRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
 		oClient: osClient,
 		kClient: kClient,
 	}
+}
+
+func (registry *Registry) GetSDNClients() (*osclient.Client, *kclient.Client) {
+	return registry.oClient, registry.kClient
 }
 
 func (registry *Registry) GetSubnets() ([]osapi.HostSubnet, error) {
@@ -133,6 +136,14 @@ func (registry *Registry) GetPod(nodeName, namespace, podName string) (*kapi.Pod
 	return nil, nil
 }
 
+func (registry *Registry) GetNamespaces() ([]kapi.Namespace, error) {
+	nsList, err := registry.kClient.Namespaces().List(kapi.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return nsList.Items, nil
+}
+
 func (registry *Registry) UpdateClusterNetwork(ni *NetworkInfo) error {
 	cn, err := registry.oClient.ClusterNetwork().Get(osapi.ClusterNetworkDefault)
 	if err != nil {
@@ -208,33 +219,6 @@ func (registry *Registry) GetNetworkInfo() (*NetworkInfo, error) {
 	return registry.NetworkInfo, nil
 }
 
-func (registry *Registry) GetNetNamespaces() ([]osapi.NetNamespace, error) {
-	netNamespaceList, err := registry.oClient.NetNamespaces().List(kapi.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return netNamespaceList.Items, nil
-}
-
-func (registry *Registry) GetNetNamespace(name string) (*osapi.NetNamespace, error) {
-	return registry.oClient.NetNamespaces().Get(name)
-}
-
-func (registry *Registry) WriteNetNamespace(name string, id uint) error {
-	netns := &osapi.NetNamespace{
-		TypeMeta:   unversioned.TypeMeta{Kind: "NetNamespace"},
-		ObjectMeta: kapi.ObjectMeta{Name: name},
-		NetName:    name,
-		NetID:      id,
-	}
-	_, err := registry.oClient.NetNamespaces().Create(netns)
-	return err
-}
-
-func (registry *Registry) DeleteNetNamespace(name string) error {
-	return registry.oClient.NetNamespaces().Delete(name)
-}
-
 func (registry *Registry) GetServicesForNamespace(namespace string) ([]kapi.Service, error) {
 	return registry.getServices(namespace)
 }
@@ -267,9 +251,6 @@ func (registry *Registry) RunEventQueue(resourceName ResourceName) *oscache.Even
 	switch resourceName {
 	case HostSubnets:
 		expectedType = &osapi.HostSubnet{}
-		client = registry.oClient
-	case NetNamespaces:
-		expectedType = &osapi.NetNamespace{}
 		client = registry.oClient
 	case Nodes:
 		expectedType = &kapi.Node{}

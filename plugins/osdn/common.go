@@ -14,6 +14,7 @@ import (
 
 	kapi "k8s.io/kubernetes/pkg/api"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/container"
+	"k8s.io/kubernetes/pkg/storage"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	kexec "k8s.io/kubernetes/pkg/util/exec"
 	kubeutilnet "k8s.io/kubernetes/pkg/util/net"
@@ -45,13 +46,12 @@ type OsdnController struct {
 	podNetworkReady    chan struct{}
 	vnidMap            map[string]uint
 	vnidLock           sync.Mutex
-	netIDManager       *netutils.NetIDAllocator
-	adminNamespaces    []string
 	iptablesSyncPeriod time.Duration
+	EtcdHelper         storage.Interface
 }
 
 // Called by plug factory functions to initialize the generic plugin instance
-func (oc *OsdnController) BaseInit(registry *Registry, pluginHooks PluginHooks, pluginName string, hostname string, selfIP string, iptablesSyncPeriod time.Duration) error {
+func (oc *OsdnController) BaseInit(registry *Registry, pluginHooks PluginHooks, etcdHelper storage.Interface, pluginName string, hostname string, selfIP string, iptablesSyncPeriod time.Duration) error {
 
 	log.Infof("Starting with configured hostname %q (IP %q), iptables sync period %q", hostname, selfIP, iptablesSyncPeriod.String())
 
@@ -84,8 +84,8 @@ func (oc *OsdnController) BaseInit(registry *Registry, pluginHooks PluginHooks, 
 	oc.HostName = hostname
 	oc.vnidMap = make(map[string]uint)
 	oc.podNetworkReady = make(chan struct{})
-	oc.adminNamespaces = make([]string, 0)
 	oc.iptablesSyncPeriod = iptablesSyncPeriod
+	oc.EtcdHelper = etcdHelper
 
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	kubeletTypes "k8s.io/kubernetes/pkg/kubelet/container"
 	knetwork "k8s.io/kubernetes/pkg/kubelet/network"
+	"k8s.io/kubernetes/pkg/storage"
 	utilsets "k8s.io/kubernetes/pkg/util/sets"
 )
 
@@ -50,10 +51,10 @@ func IsOpenShiftMultitenantNetworkPlugin(pluginName string) bool {
 	return false
 }
 
-func CreatePlugin(registry *osdn.Registry, pluginName string, hostname string, selfIP string, iptablesSyncPeriod time.Duration) (api.OsdnPlugin, error) {
+func CreatePlugin(registry *osdn.Registry, etcdHelper storage.Interface, pluginName string, hostname string, selfIP string, iptablesSyncPeriod time.Duration) (api.OsdnPlugin, error) {
 	plugin := &ovsPlugin{multitenant: IsOpenShiftMultitenantNetworkPlugin(pluginName)}
 
-	err := plugin.BaseInit(registry, plugin, pluginName, hostname, selfIP, iptablesSyncPeriod)
+	err := plugin.BaseInit(registry, plugin, etcdHelper, pluginName, hostname, selfIP, iptablesSyncPeriod)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,6 @@ func (plugin *ovsPlugin) PluginStartMaster(clusterNetwork *net.IPNet, hostSubnet
 			return err
 		}
 	}
-
 	return nil
 }
 

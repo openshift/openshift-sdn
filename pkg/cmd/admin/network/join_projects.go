@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	kapi "k8s.io/kubernetes/pkg/api"
 	kcmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 
@@ -83,16 +84,17 @@ func (j *JoinOptions) Run() error {
 	if err != nil {
 		return err
 	}
-	projects, err := j.Options.GetProjects()
+	namespacesInfo, err := j.Options.GetNamespacesInfo()
 	if err != nil {
 		return err
 	}
 
 	errList := []error{}
-	for _, project := range projects {
-		err = j.Options.CreateOrUpdateNetNamespace(project.ObjectMeta.Name, netID)
+	for _, info := range namespacesInfo {
+		err = j.Options.UpdateNamespace(info, netID)
 		if err != nil {
-			errList = append(errList, fmt.Errorf("Project '%s' failed to join '%s', error: %v", project.ObjectMeta.Name, j.joinProjectName, err))
+			ns, _ := info.Object.(*kapi.Namespace)
+			errList = append(errList, fmt.Errorf("Project '%s' failed to join '%s', error: %v", ns.ObjectMeta.Name, j.joinProjectName, err))
 		}
 	}
 	return kerrors.NewAggregate(errList)

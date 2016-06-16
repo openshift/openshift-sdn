@@ -6,23 +6,19 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	kapi "k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/api/unversioned"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/runtime"
 	kerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/sets"
 
-	osclient "github.com/openshift/origin/pkg/client"
+	"github.com/openshift/openshift-sdn/pkg/netid"
 	"github.com/openshift/origin/pkg/cmd/util/clientcmd"
-	"github.com/openshift/origin/pkg/project/api"
-	sdnapi "github.com/openshift/origin/pkg/sdn/api"
 )
 
 const (
@@ -31,13 +27,8 @@ const (
 
 type ProjectOptions struct {
 	DefaultNamespace string
-	Oclient          *osclient.Client
 	Kclient          *kclient.Client
-	Out              io.Writer
-
-	Mapper            meta.RESTMapper
-	Typer             runtime.ObjectTyper
-	RESTClientFactory func(mapping *meta.RESTMapping) (resource.RESTClient, error)
+	factory          *clientcmd.Factory
 
 	ProjectNames []string
 
@@ -51,19 +42,14 @@ func (p *ProjectOptions) Complete(f *clientcmd.Factory, c *cobra.Command, args [
 	if err != nil {
 		return err
 	}
-	oc, kc, err := f.Clients()
+	_, kc, err := f.Clients()
 	if err != nil {
 		return err
 	}
-	mapper, typer := f.Object(false)
 
 	p.DefaultNamespace = defaultNamespace
-	p.Oclient = oc
 	p.Kclient = kc
-	p.Out = out
-	p.Mapper = mapper
-	p.Typer = typer
-	p.RESTClientFactory = f.Factory.ClientForMapping
+	p.factory = f
 	p.ProjectNames = []string{}
 	if len(args) != 0 {
 		p.ProjectNames = append(p.ProjectNames, args...)
@@ -91,13 +77,14 @@ func (p *ProjectOptions) Validate() error {
 	return kerrors.NewAggregate(errList)
 }
 
-func (p *ProjectOptions) GetProjects() ([]*api.Project, error) {
-	nameArgs := []string{"projects"}
+func (p *ProjectOptions) GetNamespacesInfo() ([]*resource.Info, error) {
+	nameArgs := []string{"namespaces"}
 	if len(p.ProjectNames) != 0 {
 		nameArgs = append(nameArgs, p.ProjectNames...)
 	}
 
-	r := resource.NewBuilder(p.Mapper, p.Typer, resource.ClientMapperFunc(p.RESTClientFactory), kapi.Codecs.UniversalDecoder()).
+	mapper, typer := p.factory.Object(false)
+	r := resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(p.factory.ClientForMapping), p.factory.Decoder(true)).
 		ContinueOnError().
 		NamespaceParam(p.DefaultNamespace).
 		SelectorParam(p.Selector).
@@ -109,83 +96,94 @@ func (p *ProjectOptions) GetProjects() ([]*api.Project, error) {
 	}
 
 	errList := []error{}
-	projectList := []*api.Project{}
+	infoList := []*resource.Info{}
 	_ = r.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
-		project, ok := info.Object.(*api.Project)
+		_, ok := info.Object.(*kapi.Namespace)
 		if !ok {
-			err := fmt.Errorf("cannot convert input to Project: %v", reflect.TypeOf(info.Object))
+			err := fmt.Errorf("cannot convert input to Namespace: %v", reflect.TypeOf(info.Object))
 			errList = append(errList, err)
-			// Don't bail out if one project fails
+			// Don't bail out if one namespace fails
 			return nil
 		}
-		projectList = append(projectList, project)
+		infoList = append(infoList, info)
 		return nil
 	})
 	if len(errList) != 0 {
-		return projectList, kerrors.NewAggregate(errList)
+		return infoList, kerrors.NewAggregate(errList)
 	}
 
-	if len(projectList) == 0 {
-		return projectList, fmt.Errorf("No projects found")
+	if len(infoList) == 0 {
+		return infoList, fmt.Errorf("No projects found")
 	} else {
 		givenProjectNames := sets.NewString(p.ProjectNames...)
 		foundProjectNames := sets.String{}
-		for _, project := range projectList {
-			foundProjectNames.Insert(project.ObjectMeta.Name)
+		for _, info := range infoList {
+			ns, _ := info.Object.(*kapi.Namespace)
+			foundProjectNames.Insert(ns.ObjectMeta.Name)
 		}
 		skippedProjectNames := givenProjectNames.Difference(foundProjectNames)
 		if skippedProjectNames.Len() > 0 {
-			return projectList, fmt.Errorf("Projects %v not found", strings.Join(skippedProjectNames.List(), ", "))
+			return infoList, fmt.Errorf("Projects %v not found", strings.Join(skippedProjectNames.List(), ", "))
 		}
 	}
-	return projectList, nil
-}
-
-func (p *ProjectOptions) GetNetNamespaces() (*sdnapi.NetNamespaceList, error) {
-	netNamespaces, err := p.Oclient.NetNamespaces().List(kapi.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return netNamespaces, nil
+	return infoList, nil
 }
 
 func (p *ProjectOptions) GetNetID(name string) (uint, error) {
-	var netID uint
-	netNamespaces, err := p.GetNetNamespaces()
+	ns, err := p.Kclient.Namespaces().Get(name)
 	if err != nil {
-		return netID, err
+		return 0, err
 	}
 
-	for _, netNs := range netNamespaces.Items {
-		if name == netNs.ObjectMeta.Name {
-			return netNs.NetID, nil
+	id, err := netid.GetVNID(ns)
+	if err == netid.ErrorVNIDNotFound {
+		return 0, fmt.Errorf("netid not found for project %q. This could also happen if you are using a newer client with old openshift master. Please upgrade your master", name)
+	}
+	return id, err
+}
+
+func (p *ProjectOptions) validateNetID(name string, id uint) error {
+	// Timeout: 10 secs
+	retries := 20
+	retryInterval := 500 * time.Millisecond
+
+	var ns *kapi.Namespace
+	var curID uint
+	var err error
+	for i := 0; i < retries; i++ {
+		ns, err = p.Kclient.Namespaces().Get(name)
+		if err != nil {
+			return err
 		}
+		curID, err = netid.GetVNID(ns)
+		if (err == nil) && (curID == id) {
+			return nil
+		}
+		time.Sleep(retryInterval)
 	}
-	return netID, fmt.Errorf("Net ID not found for project: %s", name)
+
+	if err == netid.ErrorVNIDNotFound {
+		return fmt.Errorf("failed to apply netid %d for project %q. This could also happen if you are using a newer client with old openshift master. Please upgrade your master.", id, name)
+	} else {
+		return fmt.Errorf("failed to apply netid %d for project %q", id, name)
+	}
 }
 
-func (p *ProjectOptions) CreateOrUpdateNetNamespace(name string, id uint) error {
-	netns, err := p.Oclient.NetNamespaces().Get(name)
+func (p *ProjectOptions) UpdateNamespace(info *resource.Info, id uint) error {
+	ns, ok := info.Object.(*kapi.Namespace)
+	if !ok {
+		return fmt.Errorf("invalid resource info: %v", info)
+	}
+	if err := netid.SetRequestedVNID(ns, id); err != nil {
+		return err
+	}
+
+	_, err := p.Kclient.Namespaces().Update(ns)
 	if err != nil {
-		// Create netns
-		netns := newNetNamespace(name, id)
-		_, err = p.Oclient.NetNamespaces().Create(netns)
-	} else if netns.NetID != id {
-		// Update netns
-		netns.NetID = id
-		_, err = p.Oclient.NetNamespaces().Update(netns)
+		return err
 	}
-	return err
-}
-
-func newNetNamespace(name string, id uint) *sdnapi.NetNamespace {
-	return &sdnapi.NetNamespace{
-		TypeMeta:   unversioned.TypeMeta{Kind: "NetNamespace"},
-		ObjectMeta: kapi.ObjectMeta{Name: name},
-		NetName:    name,
-		NetID:      id,
-	}
+	return p.validateNetID(ns.ObjectMeta.Name, id)
 }
