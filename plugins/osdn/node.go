@@ -88,10 +88,11 @@ func (node *OsdnNode) Start() error {
 		return fmt.Errorf("Failed to set up iptables: %v", err)
 	}
 
-	networkChanged, err := node.SubnetStartNode(node.mtu)
+	networkChanged, localSubnet, err := node.SubnetStartNode(node.mtu)
 	if err != nil {
 		return err
 	}
+	node.localSubnet = localSubnet
 
 	if node.multitenant {
 		if err := node.VnidStartNode(); err != nil {
