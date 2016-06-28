@@ -15,6 +15,7 @@ import (
 
 	"github.com/openshift/openshift-sdn/pkg/netutils"
 	"github.com/openshift/openshift-sdn/plugins/osdn/api"
+	"github.com/openshift/openshift-sdn/plugins/osdn/hostport"
 
 	osclient "github.com/openshift/origin/pkg/client"
 	osapi "github.com/openshift/origin/pkg/sdn/api"
@@ -23,8 +24,12 @@ import (
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	kubeletTypes "k8s.io/kubernetes/pkg/kubelet/container"
 	knetwork "k8s.io/kubernetes/pkg/kubelet/network"
+	ktypes "k8s.io/kubernetes/pkg/types"
 	kexec "k8s.io/kubernetes/pkg/util/exec"
 	kubeutilnet "k8s.io/kubernetes/pkg/util/net"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	utilwait "k8s.io/kubernetes/pkg/util/wait"
+	"k8s.io/kubernetes/pkg/watch"
 
 	cniinvoke "github.com/appc/cni/pkg/invoke"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -36,11 +41,13 @@ type OsdnNode struct {
 	localIP            string
 	hostName           string
 	podNetworkReady    chan struct{}
+	podsByUID          map[ktypes.UID]*kapi.Pod
 	vnids              vnidMap
 	iptablesSyncPeriod time.Duration
 	host               knetwork.Host
 	masterKubeConfig   string
 	mtu                uint
+	hostportHandler    hostport.HostportHandler
 }
 
 // Called by higher layers to create the plugin SDN node instance
@@ -86,6 +93,8 @@ func NewNodePlugin(pluginName string, osClient *osclient.Client, kClient *kclien
 		iptablesSyncPeriod: iptablesSyncPeriod,
 		masterKubeConfig:   masterKubeConfig,
 		mtu:                mtu,
+		hostportHandler:    hostport.NewHostportHandler(),
+		podsByUID:          make(map[ktypes.UID]*kapi.Pod),
 	}
 	return plugin, nil
 }
@@ -187,9 +196,88 @@ func (node *OsdnNode) Start() error {
 		}
 	}
 
+	go utilwait.Forever(node.watchLocalPods, 0)
+
 	node.markPodNetworkReady()
 
 	return nil
+}
+
+func (node *OsdnNode) trackRunningPod(pod *kapi.Pod) bool {
+	if pod.Status.PodIP == "" {
+		return false
+	}
+
+log.V(2).Infof("########## tracking pod %#v", pod)
+	podInfo, ok := node.podsByUID[pod.UID]
+	if !ok || podInfo.UID != pod.UID {
+		node.podsByUID[pod.UID] = pod
+		return true
+	}
+	return false
+}
+
+func (node *OsdnNode) unTrackRunningPod(pod *kapi.Pod) {
+	delete(node.podsByUID, pod.UID)
+}
+
+// Returns a list of pods running on this node and each pod's IP address.  Assumes
+// PodSpecs retrieved from the runtime include the name and ID of containers in
+// each pod.
+func (node *OsdnNode) getRunningPods() ([]*hostport.RunningPod, error) {
+	runningPods := make([]*hostport.RunningPod, 0)
+	for _, pod := range node.podsByUID {
+		podIP := net.ParseIP(pod.Status.PodIP)
+		if podIP == nil {
+			continue
+		}
+		runningPods = append(runningPods, &hostport.RunningPod{
+			Pod: pod,
+			IP:  podIP,
+		})
+	}
+	return runningPods, nil
+}
+
+func (node *OsdnNode) watchLocalPods() {
+	eventQueue := node.registry.RunLocalPodsEventQueue(node.hostName)
+
+	for {
+		eventType, obj, err := eventQueue.Pop()
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("EventQueue failed for local pods: %v", err))
+			return
+		}
+		pod := obj.(*kapi.Pod)
+
+		log.V(5).Infof("Watch %s event for LocalPod %q", strings.Title(string(eventType)), pod.ObjectMeta.Name)
+		switch eventType {
+		case watch.Added, watch.Modified:
+			if node.trackRunningPod(pod) {
+				// Open any hostports the pod's containers want
+				runningPods, err := node.getRunningPods()
+				if err != nil {
+					log.Warningf("Failed to gather running local pods: %v", err)
+				}
+
+				log.V(2).Infof("########## opening hostports for pod %s/%s", pod.UID, pod.Status.PodIP)
+				newPod := &hostport.RunningPod{Pod: pod, IP: net.ParseIP(pod.Status.PodIP)}
+				if err := node.hostportHandler.OpenPodHostportsAndSync(newPod, "tun0", runningPods); err != nil {
+					log.Warningf("Failed to sync hostports: %v", err)
+				}
+			}
+		case watch.Deleted:
+			node.unTrackRunningPod(pod)
+			runningPods, err := node.getRunningPods()
+			if err != nil {
+				log.Warningf("Failed to gather running local pods: %v", err)
+				continue
+			}
+			if err := node.hostportHandler.SyncHostports("tun0", runningPods); err != nil {
+				log.Warningf("Failed to sync hostports: %v", err)
+			}
+		}
+	}
 }
 
 // FIXME: this should eventually go into kubelet via a CNI UPDATE/CHANGE action

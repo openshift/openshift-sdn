@@ -44,6 +44,7 @@ const (
 	Services      ResourceName = "Services"
 	HostSubnets   ResourceName = "HostSubnets"
 	Pods          ResourceName = "Pods"
+	LocalPods     ResourceName = "LocalPods"
 )
 
 func newRegistry(osClient *osclient.Client, kClient *kclient.Client) *Registry {
@@ -264,6 +265,8 @@ func (registry *Registry) RunEventQueue(resourceName ResourceName) *oscache.Even
 	var client cache.Getter
 	var expectedType interface{}
 
+	fields := fields.Everything()
+
 	switch resourceName {
 	case HostSubnets:
 		expectedType = &osapi.HostSubnet{}
@@ -287,11 +290,23 @@ func (registry *Registry) RunEventQueue(resourceName ResourceName) *oscache.Even
 		log.Fatalf("Unknown resource %s during initialization of event queue", resourceName)
 	}
 
-	lw := cache.NewListWatchFromClient(client, strings.ToLower(string(resourceName)), kapi.NamespaceAll, fields.Everything())
+	lw := cache.NewListWatchFromClient(client, strings.ToLower(string(resourceName)), kapi.NamespaceAll, fields)
 	eventQueue := oscache.NewEventQueue(cache.MetaNamespaceKeyFunc)
 	// Repopulate event queue every 30 mins
 	// Existing items in the event queue will have watch.Modified event type
 	cache.NewReflector(lw, expectedType, eventQueue, 30*time.Minute).Run()
+	return eventQueue
+}
+
+func (registry *Registry) RunLocalPodsEventQueue(nodeName string) *oscache.EventQueue {
+	if nodeName == "" {
+		log.Fatalf("LocalPods resource requires a node name")
+	}
+	lw := cache.NewListWatchFromClient(registry.kClient, strings.ToLower(string(Pods)), kapi.NamespaceAll, fields.Set{"spec.host": nodeName}.AsSelector())
+	eventQueue := oscache.NewEventQueue(cache.MetaNamespaceKeyFunc)
+	// Repopulate event queue every 30 mins
+	// Existing items in the event queue will have watch.Modified event type
+	cache.NewReflector(lw, &kapi.Pod{}, eventQueue, 30*time.Minute).Run()
 	return eventQueue
 }
 
