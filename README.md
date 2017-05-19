@@ -1,5 +1,7 @@
 ## SDN solutions for OpenShift
 
+[![Build Status](https://travis-ci.org/openshift/openshift-sdn.svg?branch=master)](https://travis-ci.org/openshift/openshift-sdn)
+
 Software to get an overlay network up and running for OpenShift.
 
 Currently, this doesn't run as a standalone binary, it works in conjunction with [openshift/origin](https://github.com/openshift/origin).
@@ -11,15 +13,15 @@ For more implementation details, refer to [ISOLATION.md](https://github.com/open
 
 #### How to Contribute
 Clone openshift origin and openshift-sdn repositories:
-	
+
 	$ git clone https://github.com/openshift/origin
 	$ git clone https://github.com/openshift/openshift-sdn
 
 Make changes to openshift-sdn repository:
-	
+
 	$ cd openshift-sdn
 	Patch files...
-        
+
 Run unit tests in openshift-sdn repository:
 
 	$ cd openshift-sdn
