@@ -155,27 +155,27 @@ func (master *OsdnMaster) watchNodes() {
 	}
 }
 
-func (node *OsdnNode) SubnetStartNode(mtu uint) (bool, error) {
-	err := node.initSelfSubnet()
+func (node *OsdnNode) SubnetStartNode(mtu uint) (bool, *osapi.HostSubnet, error) {
+	nodeSubnet, err := node.initSelfSubnet()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// Assume we are working with IPv4
 	ni, err := node.registry.GetNetworkInfo()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	networkChanged, err := node.SetupSDN(node.localSubnet.Subnet, ni.ClusterNetwork.String(), ni.ServiceNetwork.String(), mtu)
+	networkChanged, err := node.SetupSDN(nodeSubnet.Subnet, ni.ClusterNetwork.String(), ni.ServiceNetwork.String(), mtu)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	go utilwait.Forever(node.watchSubnets, 0)
-	return networkChanged, nil
+	return networkChanged, nodeSubnet, nil
 }
 
-func (node *OsdnNode) initSelfSubnet() error {
+func (node *OsdnNode) initSelfSubnet() (*osapi.HostSubnet, error) {
 	// timeout: 30 secs
 	retries := 60
 	retryInterval := 500 * time.Millisecond
@@ -193,16 +193,15 @@ func (node *OsdnNode) initSelfSubnet() error {
 		time.Sleep(retryInterval)
 	}
 	if err != nil {
-		return fmt.Errorf("Failed to get subnet for this host: %s, error: %v", node.hostName, err)
+		return nil, fmt.Errorf("Failed to get subnet for this host: %s, error: %v", node.hostName, err)
 	}
 
 	if err := node.registry.ValidateNodeIP(subnet.HostIP); err != nil {
-		return fmt.Errorf("Failed to validate own HostSubnet: %v", err)
+		return nil, fmt.Errorf("Failed to validate own HostSubnet: %v", err)
 	}
 
 	log.Infof("Found local HostSubnet %s", hostSubnetToString(subnet))
-	node.localSubnet = subnet
-	return nil
+	return subnet, nil
 }
 
 // Only run on the nodes
