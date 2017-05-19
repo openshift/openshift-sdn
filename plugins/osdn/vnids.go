@@ -277,6 +277,10 @@ func (node *OsdnNode) VnidStartNode() error {
 }
 
 func (node *OsdnNode) updatePodNetwork(namespace string, netID uint) error {
+	// FIXME: this is racy; traffic coming from the pods gets switched to the new
+	// VNID before the service and firewall rules are updated to match. We need
+	// to do the updates as a single transaction (ovs-ofctl --bundle).
+
 	// Update OF rules for the existing/old pods in the namespace
 	pods, err := node.GetLocalPods(namespace)
 	if err != nil {
@@ -303,6 +307,13 @@ func (node *OsdnNode) updatePodNetwork(namespace string, netID uint) error {
 			errList = append(errList, err)
 		}
 	}
+
+	// Update namespace references in egress firewall rules
+	err = oc.pluginHooks.UpdateEgressFirewall()
+	if err != nil {
+		errList = append(errList, err)
+	}
+
 	return kerrors.NewAggregate(errList)
 }
 
