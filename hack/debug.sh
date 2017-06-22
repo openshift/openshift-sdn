@@ -313,8 +313,13 @@ do_node () {
     echo_and_eval  tc class show                           &> $lognode/tc-class
     echo_and_eval  tc filter show                          &> $lognode/tc-filter
     echo_and_eval  systemctl cat docker.service            &> $lognode/docker-unit-file
-    echo_and_eval  cat `systemctl cat docker.service | grep EnvironmentFile.\*openshift-sdn | awk -F=- '{print $2}'` \
-                                                           &> $lognode/docker-network-file
+
+    # Work out the docker env file we install (if we do) and log its contents
+    envfile=`systemctl cat docker.service | grep EnvironmentFile.\*openshift-sdn | awk -F=- '\
+{print $2}'`
+    if [ -n "$envfile" ]; then
+        echo_and_eval  cat "$envfile"                      &> $lognode/docker-network-file
+    fi
 
 
     # Iterate over all pods on this node, and log some data about them.
