@@ -1,5 +1,13 @@
 #!/bin/bash
 
+if [ "$(docker ps | grep openvswitch)" ]; then
+    OVS_OFCTL="docker exec openvswitch ovs-ofctl"
+    OVS_APPCTL="docker exec openvswitch ovs-appctl"
+else
+    OVS_OFCTL="ovs-ofctl"
+    OVS_APPCTL="ovs-appctl"
+fi
+
 # echoes args to stderr and exits
 die () {
     echo "$*" 1>&2
@@ -187,10 +195,10 @@ do_pod_to_pod_connectivity_check () {
     fi
 
     echo "$base_pod_name -> $other_pod_name"
-    echo_and_eval ovs-appctl ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},ip,nw_src=${base_pod_addr},nw_dst=${other_pod_addr}"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},ip,nw_src=${base_pod_addr},nw_dst=${other_pod_addr}"
     echo ""
     echo "$other_pod_name -> $base_pod_name"
-    echo_and_eval ovs-appctl ofproto/trace br0 "${in_spec},ip,nw_src=${other_pod_addr},nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "${in_spec},ip,nw_src=${other_pod_addr},nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
     echo ""
 
     if nsenter -n -t $base_pod_pid -- ping -c 1 -W 2 $other_pod_addr  &> /dev/null; then
@@ -217,10 +225,10 @@ do_pod_external_connectivity_check () {
     # This address is from a range which is reserved for documentation examples
     # (RFC 5737) and not allowed to be used in private networks, so it should be
     # guaranteed to only match the default route.
-    echo_and_eval ovs-appctl ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},ip,nw_src=${base_pod_addr},nw_dst=198.51.100.1"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},ip,nw_src=${base_pod_addr},nw_dst=198.51.100.1"
     echo ""
     echo "example.com -> $base_pod_name"
-    echo_and_eval ovs-appctl ofproto/trace br0 "in_port=2,ip,nw_src=198.51.100.1,nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "in_port=2,ip,nw_src=198.51.100.1,nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
     echo ""
 
     if nsenter -n -t $base_pod_pid -- ping -c 1 -W 2 www.redhat.com  &> /dev/null; then
@@ -247,10 +255,10 @@ do_pod_service_connectivity_check () {
     echo ""
 
     echo "$base_pod_name -> $service_name"
-    echo_and_eval ovs-appctl ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},${service_proto},nw_src=${base_pod_addr},nw_dst=${service_addr},${service_proto}_dst=${service_port}"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "in_port=${base_pod_port},reg0=${base_pod_vnid},${service_proto},nw_src=${base_pod_addr},nw_dst=${service_addr},${service_proto}_dst=${service_port}"
     echo ""
     echo "$service_name -> $base_pod_name"
-    echo_and_eval ovs-appctl ofproto/trace br0 "in_port=2,${service_proto},nw_src=${service_addr},nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
+    echo_and_eval $OVS_APPCTL ofproto/trace br0 "in_port=2,${service_proto},nw_src=${service_addr},nw_dst=${base_pod_addr},dl_dst=${base_pod_ether}"
     echo ""
 
     # In bash, redirecting to /dev/tcp/HOST/PORT or /dev/udp/HOST/PORT opens a connection
@@ -307,8 +315,8 @@ do_node () {
     # Log some node-only information
     echo_and_eval  brctl show                              &> $lognode/bridges
     echo_and_eval  docker ps -a                            &> $lognode/docker-ps
-    echo_and_eval  ovs-ofctl -O OpenFlow13 dump-flows br0  &> $lognode/flows
-    echo_and_eval  ovs-ofctl -O OpenFlow13 show br0        &> $lognode/ovs-show
+    echo_and_eval  $OVS_OFCTL -O OpenFlow13 dump-flows br0  &> $lognode/flows
+    echo_and_eval  $OVS_OFCTL -O OpenFlow13 show br0        &> $lognode/ovs-show
     echo_and_eval  tc qdisc show                           &> $lognode/tc-qdisc
     echo_and_eval  tc class show                           &> $lognode/tc-class
     echo_and_eval  tc filter show                          &> $lognode/tc-filter
