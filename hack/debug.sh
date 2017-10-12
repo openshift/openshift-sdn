@@ -545,13 +545,17 @@ case "$1" in
 	    echo "  [from master]"
 	    echo "    $0"
 	    echo "  Gathers data on the master and then connects to each node via ssh"
+	    echo "    $0 --master"
+	    echo "  Runs only master debugging on local machine"
 	    echo ""
 	    echo "  [from any other machine]"
 	    echo "    $0 MASTER-NAME"
 	    echo "  Connects to MASTER-NAME via ssh and then connects to each node via ssh"
+	    echo "    $0 --node"
+	    echo "  Runs only node debugging on local machine"
 	    echo ""
-	    echo "  The machine you run from must be able to ssh to each other machine"
-	    echo "  via ssh with no password."
+	    echo "  In case of remote usage, the machine you run from must be able to ssh" 
+	    echo "  to each other machine via ssh with no password."
 	    exit 1
 	fi
 	;;
