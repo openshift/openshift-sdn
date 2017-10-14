@@ -80,6 +80,7 @@ log_system () {
 }
 
 do_master () {
+    kubelet_port=10250
     if ! nodes=$(oc get nodes --template '{{range .items}}{{.spec.externalID}} {{end}}'); then
 	if [ -z "$KUBECONFIG" -o ! -f "$KUBECONFIG" ]; then
 	    die "KUBECONFIG is unset or incorrect"
@@ -128,7 +129,7 @@ do_master () {
 	    echo "Node $node: the IP in OpenShift ($reg_ip) does not match DNS/hosts ($resolv_ip)"
 	fi
 
-	try_eval ping -c1 -W2 $node
+	try_eval curl $node:$kubelet_port
     done
 
     # Outputs a list of nodes in the form "nodename IP"
