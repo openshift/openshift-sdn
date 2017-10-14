@@ -47,7 +47,7 @@ log_service () {
     service=$2
     start_args=$3
 
-    echo_and_eval  journalctl -u $service                         &> $logpath/journal-$service
+    echo_and_eval  journalctl -u $service --since -3days          &> $logpath/journal-$service
     echo_and_eval  systemctl show $service                        &> $logpath/systemctl-show-$service
 
     config_file=$(get_config_path_from_service "$start_args" "$service")
@@ -59,7 +59,7 @@ log_service () {
 log_system () {
     logpath=$1
 
-    echo_and_eval  journalctl --boot                                  &> $logpath/journal-full
+    echo_and_eval  journalctl --since -3days                          &> $logpath/journal-full
     echo_and_eval  nmcli --nocheck -f all dev show                    &> $logpath/nmcli-dev
     echo_and_eval  nmcli --nocheck -f all con show                    &> $logpath/nmcli-con
     echo_and_eval  head -1000 /etc/sysconfig/network-scripts/ifcfg-*  &> $logpath/ifcfg
