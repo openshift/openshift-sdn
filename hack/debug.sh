@@ -542,20 +542,29 @@ case "$1" in
     "")
 	if [ -z "$aos_master_service" ]; then
 	    echo "Usage:"
-	    echo "  [from master]"
+	    echo "  [From master]"
+	    echo "  Automatic:"
 	    echo "    $0"
 	    echo "  Gathers data on the master and then connects to each node via ssh"
+	    echo ""
+	    echo "  Manual:"
 	    echo "    $0 --master"
 	    echo "  Runs only master debugging on local machine"
 	    echo ""
-	    echo "  [from any other machine]"
+	    echo "  [From any node]"
+	    echo "  Automatic:"
 	    echo "    $0 MASTER-NAME"
 	    echo "  Connects to MASTER-NAME via ssh and then connects to each node via ssh"
+	    echo ""
+	    echo "  Manual:"
 	    echo "    $0 --node"
 	    echo "  Runs only node debugging on local machine"
 	    echo ""
-	    echo "  In case of remote usage, the machine you run from must be able to ssh" 
+	    echo "  In case of Automatic usage, the machine you run from must be able to ssh" 
 	    echo "  to each other machine via ssh with no password."
+	    echo ""
+	    echo "  In Manual usage you have to login manually to the machine, upload this script," 
+	    echo " and create the meta directory."
 	    exit 1
 	fi
 	;;
