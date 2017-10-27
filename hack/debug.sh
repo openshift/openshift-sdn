@@ -81,7 +81,7 @@ log_system () {
 
 do_master () {
     kubelet_port=10250
-    if ! nodes=$(oc get nodes --template '{{range .items}}{{.spec.externalID}} {{end}}'); then
+    if ! nodes=$(oc get nodes --template '{{range .items}}{{.metadata.name}} {{end}}'); then
 	if [ -z "$KUBECONFIG" -o ! -f "$KUBECONFIG" ]; then
 	    die "KUBECONFIG is unset or incorrect"
 	else
