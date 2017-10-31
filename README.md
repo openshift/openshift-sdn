@@ -5,7 +5,7 @@ Software to get an overlay network up and running for OpenShift.
 Currently, this doesn't run as a standalone binary, it works in conjunction with [openshift/origin](https://github.com/openshift/origin).
 
 #### Network Architecture
-High level OpenShift SDN architecture can be found [here](https://docs.openshift.org/latest/architecture/additional_concepts/sdn.html).
+High level OpenShift SDN architecture can be found [here](https://docs.openshift.org/latest/architecture/networking/sdn.html).
 
 For more implementation details, refer to [ISOLATION.md](https://github.com/openshift/openshift-sdn/blob/master/ISOLATION.md).
 
