@@ -541,7 +541,7 @@ case "$1" in
 	;;
 
     "")
-	if [ -z "$aos_master_service" ]; then
+	if [ -z "$aos_master_service" ] && [ -z "$aos_master_controllers_service" ]; then
 	    echo "Usage:"
 	    echo "  [from master]"
 	    echo "    $0"
