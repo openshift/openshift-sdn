@@ -487,8 +487,9 @@ do_master_and_nodes ()
 	do_master
     else
 	if run_self_via_ssh --master $master < /dev/null; then
-	    try_eval scp $SSH_OPTS -pr root@$master:$logdir/master $logdir
-	else
+        try_eval scp $SSH_OPTS -pr root@$master:$logdir/master $logdir
+        try_eval scp $SSH_OPTS -pr root@$master:$logdir/meta $logdir
+    else
 	    return 1
 	fi
     fi
