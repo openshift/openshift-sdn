@@ -25,7 +25,7 @@ func GenerateDefaultGateway(sna *net.IPNet) net.IP {
 	return net.IPv4(ip[0], ip[1], ip[2], ip[3]|0x1)
 }
 
-// Return Host IP Networks
+// GetHostIPNetworks returns Host IP Networks
 // Ignores provided interfaces and filters loopback and non IPv4 addrs.
 func GetHostIPNetworks(skipInterfaces []string) ([]*net.IPNet, error) {
 	hostInterfaces, err := net.Interfaces()

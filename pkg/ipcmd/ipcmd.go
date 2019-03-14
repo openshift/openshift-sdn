@@ -119,7 +119,7 @@ func (tx *Transaction) AddSlave(slave string) {
 	tx.exec([]string{"link", "set", slave, "master", tx.link})
 }
 
-// AddSlave remotes the indicated slave interface from the bridge, bond, or team
+// DeleteSlave remotes the indicated slave interface from the bridge, bond, or team
 // interface associated with the transaction. (No error occurs if the interface
 // is not actually a slave of the transaction interface.)
 func (tx *Transaction) DeleteSlave(slave string) {
